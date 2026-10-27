@@ -80,7 +80,11 @@ class PinController(private val context: Context) {
     fun connect() = scope.launch {
         userWantsLink = true
         reconnectJob?.cancel()
-        runCatching { connectOnce() }.onFailure { PinLog.e("Connect failed: ${it.message}") }
+        runCatching { connectOnce() }.onFailure {
+            PinLog.e("Connect failed: ${it.message}")
+            // Out of range, Bluetooth busy after boot, ...: keep trying in the background.
+            if (userWantsLink && client.state.value != LinkState.READY) scheduleReconnect()
+        }
     }
 
     /** Connects on launch if we've linked to a pin before and aren't linked already. */
@@ -121,6 +125,7 @@ class PinController(private val context: Context) {
             while (userWantsLink && client.state.value != LinkState.READY) {
                 PinLog.i("Reconnecting in ${backoff}ms")
                 delay(backoff)
+                if (client.state.value == LinkState.READY) break // a drop's own reconnect got there first
                 if (runCatching { connectOnce() }.isSuccess) break
                 backoff = (backoff * 2).coerceAtMost(PinConfig.RECONNECT_MAX_DELAY_MS)
             }

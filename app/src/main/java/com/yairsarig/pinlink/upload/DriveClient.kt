@@ -16,13 +16,17 @@ class DriveClient(private val accessToken: String) {
 
     class HttpException(val code: Int, body: String) : IOException("Drive HTTP $code: ${body.take(300)}")
 
-    /** Returns the id of a live (non-trashed) folder named [name] in My Drive, creating it if needed. */
+    /**
+     * Returns the id of a live (non-trashed) folder named [name], wherever it is (the owner moves it
+     * into "Pin Assistant"; drive.file only ever shows us folders this app created), creating one in
+     * My Drive root only if none exists.
+     */
     fun findOrCreateFolder(name: String, cachedId: String?): String {
         cachedId?.let { id ->
             val meta = runCatching { JSONObject(request("GET", "$FILES/$id?fields=id,trashed")) }.getOrNull()
             if (meta != null && !meta.optBoolean("trashed")) return id
         }
-        val q = "name = '${escape(name)}' and mimeType = '$FOLDER_MIME' and trashed = false and 'root' in parents"
+        val q = "name = '${escape(name)}' and mimeType = '$FOLDER_MIME' and trashed = false"
         findFirst(q)?.let { return it }
         val body = JSONObject().put("name", name).put("mimeType", FOLDER_MIME).toString()
         return JSONObject(request("POST", "$FILES?fields=id", body, "application/json")).getString("id")
