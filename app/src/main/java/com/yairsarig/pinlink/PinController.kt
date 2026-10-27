@@ -6,6 +6,7 @@ import com.yairsarig.pinlink.audio.OpusPacketRecorder
 import com.yairsarig.pinlink.ble.LinkState
 import com.yairsarig.pinlink.ble.PinGattClient
 import com.yairsarig.pinlink.ble.PinScanner
+import com.yairsarig.pinlink.ble.WriteMode
 import com.yairsarig.pinlink.protocol.PinNotification
 import com.yairsarig.pinlink.protocol.PlaudCommand
 import com.yairsarig.pinlink.protocol.PlaudProtocol
@@ -24,6 +25,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -81,7 +83,7 @@ class PinController(private val context: Context) {
             ?: scanner.find() ?: error("pin not found")
         client.connect(device)
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
-        readBattery()
+        runDiagnostics().join()
     }
 
     private fun onUnexpectedDisconnect() {
@@ -112,11 +114,16 @@ class PinController(private val context: Context) {
     // ---------- Commands ----------
 
     /** Sends a command and waits for the response with the same cmdId (null on timeout). */
-    suspend fun command(cmdId: Int, payload: ByteArray = ByteArray(0), awaitResponse: Boolean = true): ByteArray? {
+    suspend fun command(
+        cmdId: Int,
+        payload: ByteArray = ByteArray(0),
+        awaitResponse: Boolean = true,
+        mode: WriteMode = WriteMode.AUTO,
+    ): ByteArray? {
         val frame = PlaudProtocol.encodeCommand(cmdId, payload)
         val waiter = if (awaitResponse) CompletableDeferred<ByteArray>().also { pendingResponses[cmdId] = it } else null
-        PinLog.i("TX cmd=$cmdId ${frame.toHex()}")
-        client.write(frame)
+        PinLog.i("TX cmd=$cmdId mode=$mode ${frame.toHex()}")
+        client.write(frame, mode)
         if (waiter == null) return null
         return withTimeoutOrNull(PinConfig.COMMAND_RESPONSE_TIMEOUT_MS) { waiter.await() }
             .also { if (it == null) PinLog.w("cmd=$cmdId: no response") }
@@ -129,9 +136,32 @@ class PinController(private val context: Context) {
         PinLog.i("Battery: ${_battery.value}")
     }
 
+    /**
+     * Sanity checks after connect: read the standard battery char and b001, then try cmd 9 with
+     * both write types (2bb1 advertises write and write-without-response).
+     */
+    fun runDiagnostics() = scope.launch {
+        PinLog.i("--- diagnostics ---")
+        for ((svc, chr) in PinConfig.DIAGNOSTIC_READS) {
+            runCatching { client.read(svc, chr) }
+                .onSuccess { PinLog.i("READ $chr = [${it.toHex()}] ascii='${it.printable()}' (${it.size} bytes)") }
+                .onFailure { PinLog.w("READ $chr failed: ${it.message}") }
+        }
+        for (mode in listOf(WriteMode.WITH_RESPONSE, WriteMode.NO_RESPONSE)) {
+            val r = runCatching { command(PlaudCommand.GET_BATTERY, mode = mode) }
+                .onFailure { PinLog.w("cmd 9 ($mode) write failed: ${it.message}") }.getOrNull()
+            PinLog.i("cmd 9 via $mode -> ${r?.toHex() ?: "no response"}")
+            r?.let(PlaudProtocol::decodeBattery)?.let { _battery.value = it }
+            delay(PinConfig.DIAGNOSTIC_GAP_MS)
+        }
+        PinLog.i("--- diagnostics done ---")
+    }
+
+    private fun ByteArray.printable() = map { b -> val c = b.toInt() and 0xFF; if (c in 32..126) c.toChar() else '.' }.joinToString("")
+
     /** Raw console for probing unknown commands. */
-    fun sendRaw(cmdId: Int, payload: ByteArray) = scope.launch {
-        runCatching { command(cmdId, payload) }
+    fun sendRaw(cmdId: Int, payload: ByteArray, mode: WriteMode = WriteMode.AUTO) = scope.launch {
+        runCatching { command(cmdId, payload, mode = mode) }
             .onSuccess { r -> PinLog.i("cmd=$cmdId response: ${r?.toHex() ?: "(none)"}") }
             .onFailure { PinLog.e("cmd=$cmdId failed", it) }
     }
@@ -173,7 +203,11 @@ class PinController(private val context: Context) {
 
     // ---------- Notifications ----------
 
-    private fun onNotification(data: ByteArray) {
+    private fun onNotification(source: UUID, data: ByteArray) {
+        if (source != PinConfig.NOTIFY_CHAR_UUID) {
+            PinLog.rx("[$source] ${data.toHex()}", true)
+            return
+        }
         when (val n = PlaudProtocol.parse(data)) {
             is PinNotification.Audio -> {
                 // Pin-initiated audio arrives with no session open: capture it anyway (open question #1).

@@ -17,6 +17,25 @@ object PinConfig {
     val NOTIFY_CHAR_UUID: UUID = UUID.fromString("00002bb0-0000-1000-8000-00805f9b34fb")
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
+    // --- Diagnostics: other characteristics found on the 2024 NotePin ---
+    val STATE_CHAR_UUID: UUID = UUID.fromString("0000b001-0000-1000-8000-00805f9b34fb")      // 1910, read
+    val B004_CHAR_UUID: UUID = UUID.fromString("0000b004-0000-1000-8000-00805f9b34fb")       // 1910, indicate
+    val FD44_SERVICE_UUID: UUID = UUID.fromString("0000fd44-0000-1000-8000-00805f9b34fb")
+    val FD44_CHAR_UUIDS: List<UUID> = (1..4).map { UUID.fromString("4f86000$it-943b-49ef-bed4-2f730304427a") } // write+indicate
+    val BATTERY_SERVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+    val BATTERY_LEVEL_UUID: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
+
+    /** (service, characteristic) pairs subscribed best-effort after the main notify char. */
+    val EXTRA_SUBSCRIPTIONS: List<Pair<UUID, UUID>> =
+        listOf(SERVICE_UUID to B004_CHAR_UUID) + FD44_CHAR_UUIDS.map { FD44_SERVICE_UUID to it }
+
+    /** (service, characteristic) pairs read and logged by the diagnostics run. */
+    val DIAGNOSTIC_READS: List<Pair<UUID, UUID>> =
+        listOf(BATTERY_SERVICE_UUID to BATTERY_LEVEL_UUID, SERVICE_UUID to STATE_CHAR_UUID)
+
+    /** Pause between the two cmd 9 write-type attempts so responses can't be confused. */
+    const val DIAGNOSTIC_GAP_MS = 1_000L
+
     /** Default ATT MTU (23) truncates audio notifications, so ask for the max. */
     const val REQUESTED_MTU = 517
     const val POST_CONNECT_DELAY_MS = 2_000L

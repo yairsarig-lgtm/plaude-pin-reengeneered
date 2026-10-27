@@ -11,6 +11,7 @@ import android.content.Context
 import android.os.Build
 import com.yairsarig.pinlink.PinConfig
 import com.yairsarig.pinlink.PinLog
+import com.yairsarig.pinlink.protocol.toHex
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,8 +19,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import java.util.UUID
 
 enum class LinkState { DISCONNECTED, CONNECTING, READY }
+
+/** How to write to the command characteristic. AUTO = with-response if the char supports it. */
+enum class WriteMode { AUTO, WITH_RESPONSE, NO_RESPONSE }
 
 /**
  * One GATT connection to the pin. Android allows a single outstanding GATT operation, so every
@@ -28,7 +33,7 @@ enum class LinkState { DISCONNECTED, CONNECTING, READY }
 @SuppressLint("MissingPermission") // Permissions are checked by MainActivity before anything runs.
 class PinGattClient(
     private val context: Context,
-    private val onNotification: (ByteArray) -> Unit,
+    private val onNotification: (UUID, ByteArray) -> Unit,
     private val onDisconnected: () -> Unit,
 ) {
     private val _state = MutableStateFlow(LinkState.DISCONNECTED)
@@ -38,6 +43,7 @@ class PinGattClient(
     private var writeChar: BluetoothGattCharacteristic? = null
     private val opLock = Mutex()
     @Volatile private var pendingOp: CompletableDeferred<Int>? = null
+    @Volatile private var pendingRead: ByteArray? = null
     @Volatile private var connectSignal: CompletableDeferred<Boolean>? = null
 
     var mtu = 23
@@ -47,7 +53,7 @@ class PinGattClient(
     suspend fun connect(device: BluetoothDevice) {
         close()
         _state.value = LinkState.CONNECTING
-        PinLog.i("Connecting to ${device.address} (${device.name})")
+        PinLog.i("Connecting to ${device.address} (${device.name}) bond=${device.bondState}")
         try {
             val connected = CompletableDeferred<Boolean>().also { connectSignal = it }
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
@@ -64,7 +70,12 @@ class PinGattClient(
             val notifyChar = service.getCharacteristic(PinConfig.NOTIFY_CHAR_UUID) ?: error("notify characteristic missing")
 
             delay(PinConfig.POST_CONNECT_DELAY_MS)
-            enableNotifications(g, notifyChar)
+            subscribe(g, notifyChar)
+            for ((svc, chr) in PinConfig.EXTRA_SUBSCRIPTIONS) {
+                val c = g.getService(svc)?.getCharacteristic(chr)
+                if (c == null) PinLog.w("Extra subscription: $chr not present")
+                else runCatching { subscribe(g, c) }.onFailure { PinLog.w("Subscribe $chr failed: ${it.message}") }
+            }
             _state.value = LinkState.READY
             PinLog.i("Link ready (mtu=$mtu)")
         } catch (t: Throwable) {
@@ -74,13 +85,17 @@ class PinGattClient(
         }
     }
 
-    suspend fun write(bytes: ByteArray) {
+    suspend fun write(bytes: ByteArray, mode: WriteMode = WriteMode.AUTO) {
         val g = gatt ?: error("not connected")
         val c = writeChar ?: error("not connected")
-        val withResponse = c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0
+        val withResponse = when (mode) {
+            WriteMode.AUTO -> c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0
+            WriteMode.WITH_RESPONSE -> true
+            WriteMode.NO_RESPONSE -> false
+        }
         val type = if (withResponse) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        gattOp("write") {
+        gattOp("write(${if (withResponse) "DEFAULT" else "NO_RESPONSE"})") {
             if (Build.VERSION.SDK_INT >= 33) {
                 g.writeCharacteristic(c, bytes, type) == BluetoothGatt.GATT_SUCCESS
             } else {
@@ -92,6 +107,15 @@ class PinGattClient(
                 g.writeCharacteristic(c)
             }
         }
+    }
+
+    /** Reads one characteristic. Throws if it's missing or the read fails. */
+    suspend fun read(service: UUID, characteristic: UUID): ByteArray {
+        val g = gatt ?: error("not connected")
+        val c = g.getService(service)?.getCharacteristic(characteristic) ?: error("$characteristic not present")
+        pendingRead = null
+        gattOp("read $characteristic") { g.readCharacteristic(c) }
+        return pendingRead ?: ByteArray(0)
     }
 
     fun close() {
@@ -106,12 +130,13 @@ class PinGattClient(
         _state.value = LinkState.DISCONNECTED
     }
 
-    private suspend fun enableNotifications(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+    /** Enables notify or indicate (whichever the char supports) and writes its CCCD. */
+    private suspend fun subscribe(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
         check(g.setCharacteristicNotification(c, true)) { "setCharacteristicNotification failed" }
         val cccd = c.getDescriptor(PinConfig.CCCD_UUID) ?: error("CCCD missing")
-        val value = if (c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)
-            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE else BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-        gattOp("writeCCCD") {
+        val notify = c.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0
+        val value = if (notify) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE else BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        gattOp("writeCCCD ${c.uuid}") {
             if (Build.VERSION.SDK_INT >= 33) {
                 g.writeDescriptor(cccd, value) == BluetoothGatt.GATT_SUCCESS
             } else {
@@ -121,6 +146,7 @@ class PinGattClient(
                 g.writeDescriptor(cccd)
             }
         }
+        PinLog.i("Subscribed ${c.uuid} (${if (notify) "notify" else "indicate"})")
     }
 
     /** Runs one GATT op and suspends until its callback reports a status. */
@@ -164,20 +190,34 @@ class PinGattClient(
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) { pendingOp?.complete(status) }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            PinLog.i("onCharacteristicWrite ${c.uuid} status=$status")
             pendingOp?.complete(status)
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            PinLog.i("onDescriptorWrite ${d.characteristic.uuid}/${d.uuid} status=$status")
             pendingOp?.complete(status)
         }
 
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            pendingRead = value
+            pendingOp?.complete(status)
+        }
+
+        @Deprecated("API < 33")
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT < 33) @Suppress("DEPRECATION") onCharacteristicRead(g, c, c.value?.copyOf() ?: ByteArray(0), status)
+        }
+
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
-            onNotification(value)
+            onNotification(c.uuid, value)
         }
 
         @Deprecated("API < 33")
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
-            if (Build.VERSION.SDK_INT < 33) @Suppress("DEPRECATION") onNotification(c.value.copyOf())
+            if (Build.VERSION.SDK_INT < 33) @Suppress("DEPRECATION") onNotification(c.uuid, c.value.copyOf())
         }
+
+        override fun onServiceChanged(g: BluetoothGatt) { PinLog.w("onServiceChanged — GATT table changed") }
     }
 }

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.yairsarig.pinlink.ble.WriteMode
 import com.yairsarig.pinlink.protocol.hexToBytes
 import kotlinx.coroutines.launch
 
@@ -91,6 +92,7 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         var cmdId by remember { mutableStateOf("") }
         var payload by remember { mutableStateOf("") }
+        var writeMode by remember { mutableStateOf(WriteMode.AUTO) }
 
         Column(Modifier.safeDrawingPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Link: $link   Battery: ${battery?.let { "${it.percent}%${if (it.charging) " ⚡" else ""}" } ?: "?"}")
@@ -102,6 +104,7 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { controller.disconnect() }) { Text("Disconnect") }
                 Button(onClick = { controller.forgetPin() }) { Text("Forget") }
                 Button(onClick = { controller.readBattery() }) { Text("Battery") }
+                Button(onClick = { controller.runDiagnostics() }) { Text("Diagnose") }
                 Button(onClick = { controller.startLiveSession() }) { Text("Start live") }
                 Button(onClick = { controller.stopLiveSession() }) { Text("Stop live") }
                 Button(onClick = { scope.launch { decodeAndPlay() } }) { Text("Decode + play") }
@@ -110,7 +113,10 @@ class MainActivity : ComponentActivity() {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(cmdId, { cmdId = it }, Modifier.weight(0.25f), label = { Text("cmd") }, singleLine = true)
                 OutlinedTextField(payload, { payload = it }, Modifier.weight(0.55f), label = { Text("payload hex") }, singleLine = true)
-                Button(onClick = { sendRaw(cmdId, payload) }, Modifier.weight(0.2f)) { Text("Send") }
+                Button(onClick = { sendRaw(cmdId, payload, writeMode) }, Modifier.weight(0.2f)) { Text("Send") }
+            }
+            Button(onClick = { writeMode = WriteMode.entries[(writeMode.ordinal + 1) % WriteMode.entries.size] }) {
+                Text("Console write: $writeMode")
             }
 
             val listState = rememberLazyListState()
@@ -121,10 +127,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun sendRaw(cmd: String, hex: String) {
+    private fun sendRaw(cmd: String, hex: String, mode: WriteMode) {
         val id = cmd.trim().let { if (it.startsWith("0x")) it.drop(2).toIntOrNull(16) else it.toIntOrNull() }
         val bytes = runCatching { hex.hexToBytes() }.getOrNull()
-        if (id == null || bytes == null) PinLog.w("Bad cmd/payload: '$cmd' '$hex'") else controller.sendRaw(id, bytes)
+        if (id == null || bytes == null) PinLog.w("Bad cmd/payload: '$cmd' '$hex'") else controller.sendRaw(id, bytes, mode)
     }
 
     private suspend fun decodeAndPlay() {
