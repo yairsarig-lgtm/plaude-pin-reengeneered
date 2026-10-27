@@ -101,7 +101,7 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - [x] **Phase 2 — Stored-file sync.** List (cmd 26), sync (cmd 28), auto-sync on button stop and on every (re)connect, resume interrupted transfers from the last byte. The pin's list only shows un-pulled files, so it is the "what's left" record.
 - [x] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
 - [x] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
-- [ ] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
+- [x] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
 - [ ] **Phase 6 — Polish.** Status screen: connection state, battery, queue counts, last upload. Notification when a memo is uploaded.
 
 ## Device notes (owner's phone: Xiaomi, HyperOS)
@@ -111,6 +111,9 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
   The app shows a setup checklist for both plus Android's battery-optimization exemption.
   Neither Xiaomi setting can be read by apps, so the owner confirms them with "Done".
 - Verified 2026-10-27: with Autostart off, MY_PACKAGE_REPLACED never reached the app.
+- BOOT_COMPLETED only arrives after the first unlock following a reboot (normal Android).
+- When the Bluetooth adapter turns off, GATT clients may get no disconnect callback. The app
+  watches ACTION_STATE_CHANGED and pings a quiet link every 45 s (cmd 9) to catch dead links.
 
 ## Drive contract
 

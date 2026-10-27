@@ -59,6 +59,10 @@ object PinConfig {
     const val START_TO_SYNC_DELAY_MS = 1_000L
     const val SESSION_SETUP_ATTEMPTS = 3
 
+    // --- Link health ---
+    /** If nothing has arrived from the pin for this long, ping it (cmd 9); no answer = dead link. */
+    const val HEALTH_CHECK_INTERVAL_MS = 45_000L
+
     // --- Reconnect ---
     const val RECONNECT_INITIAL_DELAY_MS = 1_000L
     const val RECONNECT_MAX_DELAY_MS = 30_000L
@@ -114,6 +118,8 @@ object PinConfig {
 
     // --- UI ---
     const val UI_LOG_LINES = 300
+    /** Log only every Nth audio packet (plus the first 3 of each transfer). */
+    const val AUDIO_LOG_EVERY_N = 200
 
     // --- Prefs ---
     const val PREFS_NAME = "pinlink"

@@ -1,6 +1,11 @@
 package com.yairsarig.pinlink
 
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import com.yairsarig.pinlink.audio.OpusDecoder
 import com.yairsarig.pinlink.audio.OpusPacketFile
 import com.yairsarig.pinlink.audio.OpusPacketRecorder
@@ -68,9 +73,32 @@ class PinController(private val context: Context) {
     @Volatile private var liveSessionId: Long? = null
     @Volatile private var userWantsLink = false
     private var reconnectJob: Job? = null
+    private var healthJob: Job? = null
+    @Volatile private var lastRxAt = 0L
     private var audioPacketsSinceUiLog = 0
 
+    /**
+     * Android often sends GATT clients no disconnect callback when the Bluetooth adapter turns
+     * off, leaving a link that looks READY but is dead. Watch the adapter directly.
+     */
+    private val adapterReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                    reconnectJob?.cancel()
+                    if (client.state.value != LinkState.DISCONNECTED) handleDeadLink("Bluetooth turned off", reconnect = false)
+                }
+                BluetoothAdapter.STATE_ON -> {
+                    PinLog.i("Bluetooth on")
+                    if (userWantsLink && client.state.value == LinkState.DISCONNECTED) connect()
+                }
+            }
+        }
+    }
+
     init {
+        ContextCompat.registerReceiver(context, adapterReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         _lastCapture.value = recordingsDir.listFiles { f -> f.name.endsWith(PinConfig.RAW_PACKET_EXT) }
             ?.maxByOrNull { it.lastModified() }
     }
@@ -95,6 +123,7 @@ class PinController(private val context: Context) {
     fun disconnect() = scope.launch {
         userWantsLink = false
         reconnectJob?.cancel()
+        healthJob?.cancel()
         if (liveSessionId != null) stopLiveSession().join()
         client.close()
         closeRecorder()
@@ -105,11 +134,39 @@ class PinController(private val context: Context) {
             ?: scanner.find() ?: error("pin not found")
         client.connect(device)
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
+        startHealthCheck()
         readBattery().join()
         if (PinConfig.SYNC_ON_CONNECT) scope.launch { listFiles().join(); syncPending() }
     }
 
+    /** Pings the pin when it has been quiet; a link that can't answer gets torn down and rebuilt. */
+    private fun startHealthCheck() {
+        healthJob?.cancel()
+        lastRxAt = System.currentTimeMillis()
+        healthJob = scope.launch {
+            while (client.state.value == LinkState.READY) {
+                delay(PinConfig.HEALTH_CHECK_INTERVAL_MS)
+                if (client.state.value != LinkState.READY) break
+                if (System.currentTimeMillis() - lastRxAt < PinConfig.HEALTH_CHECK_INTERVAL_MS) continue
+                val alive = runCatching { command(PlaudCommand.GET_BATTERY) }.getOrNull() != null
+                if (!alive) return@launch handleDeadLink("Link unresponsive", reconnect = true)
+            }
+        }
+    }
+
+    /** The link is dead but no GATT callback said so: close it and handle it like a drop. */
+    private fun handleDeadLink(reason: String, reconnect: Boolean) {
+        PinLog.w("$reason — closing link")
+        client.close()
+        healthJob?.cancel()
+        _pinRecording.value = false
+        transferDone?.cancel()
+        closeRecorder()
+        if (reconnect && userWantsLink) scheduleReconnect()
+    }
+
     private fun onUnexpectedDisconnect() {
+        healthJob?.cancel()
         PinLog.w("Link dropped")
         _pinRecording.value = false
         liveSessionId = null
@@ -314,6 +371,7 @@ class PinController(private val context: Context) {
     // ---------- Notifications ----------
 
     private fun onNotification(source: UUID, data: ByteArray) {
+        lastRxAt = System.currentTimeMillis()
         if (source != PinConfig.NOTIFY_CHAR_UUID) {
             PinLog.rx("[$source] ${data.toHex()}", true)
             return
@@ -323,8 +381,10 @@ class PinController(private val context: Context) {
                 val rec = recorder ?: openRecorder(n.sessionId, "unsolicited").also { PinLog.w("Audio arrived with no transfer open!") }
                 if (recorderSession != n.sessionId) PinLog.w("Audio for sid=${n.sessionId} while recording sid=$recorderSession")
                 rec.append(n.position, n.audio)
-                val toUi = rec.packets <= 3 || ++audioPacketsSinceUiLog % 200 == 0
-                PinLog.rx("[audio sid=${n.sessionId} pos=${n.position} len=${n.audio.size}] ${data.toHex()}", toUi)
+                // Sampled: logging all ~25 packets/s floods logcat's buffer and the log file.
+                if (rec.packets <= 3 || ++audioPacketsSinceUiLog % PinConfig.AUDIO_LOG_EVERY_N == 0) {
+                    PinLog.rx("[audio sid=${n.sessionId} pos=${n.position} len=${n.audio.size}] ${data.toHex()}", toUi = true)
+                }
             }
             is PinNotification.AudioEnd -> {
                 // Always followed by cmd 29, which is what completes the transfer.
