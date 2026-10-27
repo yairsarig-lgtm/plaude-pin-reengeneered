@@ -3,12 +3,15 @@ package com.yairsarig.pinlink.upload
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import com.google.android.gms.auth.GoogleAuthUtil
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Tasks
 import com.yairsarig.pinlink.PinConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Drive access via Google's AuthorizationClient. The OAuth client is the Android type registered
@@ -22,8 +25,19 @@ object DriveAuth {
     sealed class Outcome {
         data class Token(val accessToken: String) : Outcome()
         /** First use, or consent was revoked: needs an Activity to show Google's consent screen. */
-        data class NeedsConsent(val intent: PendingIntent) : Outcome()
+        data class NeedsConsent(val intent: PendingIntent?) : Outcome()
     }
+
+    /** App-wide Drive status for the UI: null = unknown yet. Set by the UI's checks and by uploads. */
+    private val _connected = MutableStateFlow<Boolean?>(null)
+    val connected: StateFlow<Boolean?> = _connected
+    fun setConnected(value: Boolean) { _connected.value = value }
+
+    /** Blocking. Drive calls that survive a revoked/stale cached token; see [DriveSession]. */
+    fun session(context: Context) = DriveSession(
+        authorize = { authorize(context) },
+        clearToken = { GoogleAuthUtil.clearToken(context, it) },
+    )
 
     /** Blocking; call off the main thread. */
     fun authorize(context: Context): Outcome = toOutcome(Tasks.await(Identity.getAuthorizationClient(context).authorize(request)))
@@ -40,7 +54,7 @@ object DriveAuth {
         toOutcome(Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(data))
 
     private fun toOutcome(r: AuthorizationResult): Outcome = when {
-        r.hasResolution() -> Outcome.NeedsConsent(r.pendingIntent!!)
+        r.hasResolution() -> Outcome.NeedsConsent(r.pendingIntent)
         else -> Outcome.Token(r.accessToken ?: error("authorized but no access token"))
     }
 }

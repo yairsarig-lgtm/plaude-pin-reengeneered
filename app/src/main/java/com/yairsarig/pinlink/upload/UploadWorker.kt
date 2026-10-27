@@ -27,27 +27,33 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (!transcript.exists()) return@withContext Result.failure().also { PinLog.e("Upload: ${transcript.name} missing") }
 
         try {
-            val token = when (val auth = DriveAuth.authorize(applicationContext)) {
-                is DriveAuth.Outcome.Token -> auth.accessToken
-                is DriveAuth.Outcome.NeedsConsent -> {
-                    // Retrying can't help; Connect Drive re-queues everything pending.
-                    PinLog.w("Upload ${transcript.name}: Drive not connected — notifying")
+            val prefs = applicationContext.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
+            val outcome = DriveAuth.session(applicationContext).run { token ->
+                val drive = DriveClient(token)
+                val folderId = drive.findOrCreateFolder(PinConfig.DRIVE_FOLDER, prefs.getString(PinConfig.PREF_DRIVE_FOLDER_ID, null))
+                prefs.edit().putString(PinConfig.PREF_DRIVE_FOLDER_ID, folderId).apply()
+                val existing = drive.findFile(folderId, transcript.name)
+                val id = existing ?: drive.uploadText(folderId, transcript.name, transcript.readText())
+                drive.ensureInFolder(id, folderId) // the file we just created only
+                id to (existing != null)
+            }
+            when (outcome) {
+                is DriveSession.Result.NeedsConsent -> {
+                    // Retrying can't help; reconnecting re-queues everything pending.
+                    PinLog.w("Upload ${transcript.name}: Drive access revoked or missing — notifying, not retrying")
+                    DriveAuth.setConnected(false)
                     Notifications.driveReconnect(applicationContext)
-                    return@withContext Result.failure()
+                    Result.failure()
+                }
+                is DriveSession.Result.Ok -> {
+                    val (id, existed) = outcome.value
+                    marker.writeText(id)
+                    DriveAuth.setConnected(true)
+                    Notifications.clearDriveReconnect(applicationContext)
+                    PinLog.i(if (existed) "Upload ${transcript.name}: already in ${PinConfig.DRIVE_FOLDER} ($id)" else "Uploaded ${transcript.name} -> ${PinConfig.DRIVE_FOLDER} ($id)")
+                    Result.success()
                 }
             }
-            Notifications.clearDriveReconnect(applicationContext)
-            val drive = DriveClient(token)
-            val prefs = applicationContext.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
-            val folderId = drive.findOrCreateFolder(PinConfig.DRIVE_FOLDER, prefs.getString(PinConfig.PREF_DRIVE_FOLDER_ID, null))
-            prefs.edit().putString(PinConfig.PREF_DRIVE_FOLDER_ID, folderId).apply()
-
-            val existing = drive.findFile(folderId, transcript.name)
-            val id = existing ?: drive.uploadText(folderId, transcript.name, transcript.readText())
-            drive.ensureInFolder(id, folderId)
-            marker.writeText(id)
-            PinLog.i(if (existing != null) "Upload ${transcript.name}: already in ${PinConfig.DRIVE_FOLDER} ($id)" else "Uploaded ${transcript.name} -> ${PinConfig.DRIVE_FOLDER} ($id)")
-            Result.success()
         } catch (t: Throwable) {
             PinLog.e("Upload ${transcript.name} failed (attempt ${runAttemptCount + 1})", t)
             Result.retry()

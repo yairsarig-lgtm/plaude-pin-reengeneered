@@ -93,13 +93,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val driveConnected = androidx.compose.runtime.mutableStateOf<Boolean?>(null)
 
     private val consentLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         val outcome = runCatching { DriveAuth.fromConsentResult(this, r.data) }
-        driveConnected.value = outcome.getOrNull() is DriveAuth.Outcome.Token
-        PinLog.i(if (driveConnected.value == true) "Drive connected" else "Drive consent not granted: ${outcome.exceptionOrNull()?.message ?: "cancelled"}")
-        if (driveConnected.value == true) {
+        DriveAuth.setConnected(outcome.getOrNull() is DriveAuth.Outcome.Token)
+        PinLog.i(if (DriveAuth.connected.value == true) "Drive connected" else "Drive consent not granted: ${outcome.exceptionOrNull()?.message ?: "cancelled"}")
+        if (DriveAuth.connected.value == true) {
             Notifications.clearDriveReconnect(this)
             Pipeline.resumePending(this)
         }
@@ -110,14 +109,15 @@ class MainActivity : ComponentActivity() {
         DriveAuth.authorizeAsync(this) { result ->
             result.onSuccess { outcome ->
                 when (outcome) {
-                    is DriveAuth.Outcome.Token -> driveConnected.value = true
+                    is DriveAuth.Outcome.Token -> DriveAuth.setConnected(true)
                     is DriveAuth.Outcome.NeedsConsent -> {
-                        driveConnected.value = false
-                        if (interactive) consentLauncher.launch(IntentSenderRequest.Builder(outcome.intent.intentSender).build())
+                        DriveAuth.setConnected(false)
+                        val pi = outcome.intent
+                        if (interactive && pi != null) consentLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
                     }
                 }
             }.onFailure {
-                driveConnected.value = false
+                DriveAuth.setConnected(false)
                 PinLog.e("Drive authorization failed: ${it.message}")
             }
         }
@@ -153,6 +153,7 @@ class MainActivity : ComponentActivity() {
         val lastCapture by controller.lastCapture.collectAsStateWithLifecycle()
         val log by PinLog.lines.collectAsStateWithLifecycle()
         val stored by controller.storedFiles.collectAsStateWithLifecycle()
+        val driveConnected by DriveAuth.connected.collectAsStateWithLifecycle()
         val pinRecording by controller.pinRecording.collectAsStateWithLifecycle()
         val busy = pinRecording || recording != null
         val scope = rememberCoroutineScope()
@@ -164,7 +165,7 @@ class MainActivity : ComponentActivity() {
             Text("Link: $link   Battery: ${battery?.let { "${it.percent}%${if (it.charging) " ⚡" else ""}" } ?: "?"}")
             Text("Recording: ${recording ?: "-"}")
             Text("Last capture: ${lastCapture?.name ?: "-"}")
-            Text("Drive: ${when (driveConnected.value) { true -> "connected"; false -> "not connected"; null -> "checking…" }}")
+            Text("Drive: ${when (driveConnected) { true -> "connected"; false -> "not connected"; null -> "checking…" }}")
             Text("On pin: ${stored.size} file(s), ${stored.sumOf { it.bytes } / PinConfig.OPUS_BYTES_PER_SEC}s")
 
             for (step in setupSteps.value) {
