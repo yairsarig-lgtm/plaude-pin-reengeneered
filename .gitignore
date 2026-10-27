@@ -1,0 +1,29 @@
+# Android / Gradle
+.gradle/
+build/
+*/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Secrets
+google-services.json
+secrets.properties
+
+# Large model files (downloaded on first run)
+*.bin
+*.ggml
+
+# OS
+.DS_Store
+Thumbs.db
