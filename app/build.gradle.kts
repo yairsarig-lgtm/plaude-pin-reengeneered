@@ -70,4 +70,5 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:21.2.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303") // real org.json; Android's is stubbed in JVM tests
 }

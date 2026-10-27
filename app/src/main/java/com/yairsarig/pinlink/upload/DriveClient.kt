@@ -1,6 +1,7 @@
 package com.yairsarig.pinlink.upload
 
 import com.yairsarig.pinlink.PinConfig
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -32,7 +33,7 @@ class DriveClient(private val accessToken: String) {
 
     /** Multipart upload of a small text file. Returns the new file id. */
     fun uploadText(folderId: String, name: String, text: String): String {
-        val meta = JSONObject().put("name", name).put("parents", listOf(folderId)).put("mimeType", "text/plain").toString()
+        val meta = uploadMetadata(folderId, name).toString()
         val boundary = "pinlink-${System.nanoTime()}"
         val body = buildString {
             append("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$meta\r\n")
@@ -43,16 +44,37 @@ class DriveClient(private val accessToken: String) {
             .getString("id")
     }
 
+    /**
+     * Makes sure [fileId] lives in [folderId] (and only there). Returns true if it had to be moved.
+     * Drive's PATCH goes through POST + X-HTTP-Method-Override; HttpURLConnection can't send PATCH.
+     */
+    fun ensureInFolder(fileId: String, folderId: String): Boolean {
+        val parents = JSONObject(request("GET", "$FILES/$fileId?fields=parents")).optJSONArray("parents") ?: JSONArray()
+        val current = (0 until parents.length()).map { parents.getString(it) }
+        if (current == listOf(folderId)) return false
+        val remove = current.filter { it != folderId }.joinToString(",")
+        val url = "$FILES/$fileId?addParents=$folderId" + (if (remove.isNotEmpty()) "&removeParents=$remove" else "") + "&fields=id"
+        request("POST", url, "{}", "application/json", methodOverride = "PATCH")
+        return true
+    }
+
     private fun findFirst(q: String): String? {
         val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&fields=files(id)&pageSize=1&spaces=drive"
         val files = JSONObject(request("GET", url)).getJSONArray("files")
         return if (files.length() > 0) files.getJSONObject(0).getString("id") else null
     }
 
-    private fun request(method: String, url: String, body: String? = null, contentType: String? = null): String {
+    private fun request(
+        method: String,
+        url: String,
+        body: String? = null,
+        contentType: String? = null,
+        methodOverride: String? = null,
+    ): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = method
+            methodOverride?.let { conn.setRequestProperty("X-HTTP-Method-Override", it) }
             conn.connectTimeout = PinConfig.HTTP_TIMEOUT_MS
             conn.readTimeout = PinConfig.HTTP_TIMEOUT_MS
             conn.setRequestProperty("Authorization", "Bearer $accessToken")
@@ -73,9 +95,13 @@ class DriveClient(private val accessToken: String) {
 
     private fun escape(s: String) = s.replace("\\", "\\\\").replace("'", "\\'")
 
-    private companion object {
-        const val FILES = "https://www.googleapis.com/drive/v3/files"
-        const val UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
-        const val FOLDER_MIME = "application/vnd.google-apps.folder"
+    companion object {
+        /** `parents` must be a JSON array; org.json turns a Kotlin List into the string "[id]". */
+        fun uploadMetadata(folderId: String, name: String): JSONObject =
+            JSONObject().put("name", name).put("parents", JSONArray().put(folderId)).put("mimeType", "text/plain")
+
+        private const val FILES = "https://www.googleapis.com/drive/v3/files"
+        private const val UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+        private const val FOLDER_MIME = "application/vnd.google-apps.folder"
     }
 }

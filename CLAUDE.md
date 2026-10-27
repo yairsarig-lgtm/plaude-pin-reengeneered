@@ -99,12 +99,16 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 
 - [x] **Phase 1 — Prove the link (do first, highest risk).** Bare app: scan, connect, subscribe, log raw notifications as hex, read battery (cmd 9), run the live-session recipe, save raw Opus to a file. Then decode to WAV and play it back. Answer the open question above.
 - [x] **Phase 2 — Stored-file sync.** List (cmd 26), sync (cmd 28), auto-sync on button stop and on every (re)connect, resume interrupted transfers from the last byte. The pin's list only shows un-pulled files, so it is the "what's left" record.
-- [ ] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
-- [ ] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
+- [x] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
+- [x] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
 - [ ] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
 - [ ] **Phase 6 — Polish.** Status screen: connection state, battery, queue counts, last upload. Notification when a memo is uploaded.
 
 ## Backlog
+
+- Google Cloud: OAuth client is the Android type for `com.yairsarig.pinlink` + this PC's debug
+  keystore SHA-1. Building on another machine (different debug key) breaks Drive auth until that
+  SHA-1 is added to the same client. The app's Drive folder is the one it created (drive.file scope).
 
 - Later: find a command to change or soften the pin's vibration.
 - Low priority: phone-initiated "Start live" is slow and also makes the pin record. Works.

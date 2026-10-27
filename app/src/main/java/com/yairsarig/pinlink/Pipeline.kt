@@ -46,23 +46,27 @@ object Pipeline {
         PinLog.i("Queued transcription of ${capture.name}")
     }
 
-    fun enqueueUpload(context: Context, sessionId: Long) {
+    /** [policy] REPLACE restarts a job stuck in backoff; safe because uploads are idempotent. */
+    fun enqueueUpload(context: Context, sessionId: Long, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val req = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(workDataOf(KEY_SESSION_ID to sessionId))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, PinConfig.WORK_BACKOFF_SECONDS, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("upload-$sessionId", ExistingWorkPolicy.KEEP, req)
+        WorkManager.getInstance(context).enqueueUniqueWork("upload-$sessionId", policy, req)
     }
 
-    /** Re-queues anything a crash or reboot left half-way. Safe to call any time. */
+    /**
+     * Re-queues anything a crash or reboot left half-way, and re-checks every uploaded transcript's
+     * placement in Drive. Safe to call any time (app start, after Connect Drive).
+     */
     fun resumePending(context: Context) {
         val captures = recordingsDir(context).listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }.orEmpty()
         for (c in captures) {
             val sid = sessionIdOf(c) ?: continue
             val transcript = transcriptFile(context, sid)
             if (!transcript.exists()) enqueueTranscription(context, c, sid)
-            else if (!uploadedMarker(transcript).exists()) enqueueUpload(context, sid)
+            else enqueueUpload(context, sid, ExistingWorkPolicy.REPLACE)
         }
     }
 
