@@ -31,6 +31,27 @@ class AudioTest {
         assertArrayEquals(byteArrayOf(4, 5), p[1].bytes)
     }
 
+    @Test fun resumeTrimsToContiguousAndContinues() {
+        val f = File.createTempFile("partial", ".opuspk").apply { deleteOnExit() }
+        OpusPacketRecorder(f).use {
+            it.append(0, ByteArray(160))
+            it.append(160, ByteArray(160))
+            it.append(480, ByteArray(160)) // gap: 320 missing
+        }
+        assertEquals(320L, OpusPacketFile.trimToContiguous(f))
+        assertEquals(2, OpusPacketFile.read(f).size)
+        OpusPacketRecorder(f, resumeFrom = 320).use {
+            it.append(320, ByteArray(160))
+            assertEquals(0, it.gaps)
+            assertEquals(160L, it.bytes)
+        }
+        assertEquals(480L, OpusPacketFile.trimToContiguous(f))
+    }
+
+    @Test fun trimMissingFileIsZero() {
+        assertEquals(0L, OpusPacketFile.trimToContiguous(File("does-not-exist.opuspk")))
+    }
+
     @Test fun fixedSplitDropsTrailingPartialFrame() {
         val frames = FrameSplitter.fixed(ByteArray(170) { it.toByte() }, 80)
         assertEquals(2, frames.size)

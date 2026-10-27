@@ -12,5 +12,6 @@ class PinLinkApp : Application() {
         PinLog.init(File(getExternalFilesDir(null), PinConfig.DIR_LOGS))
         controller = PinController(this)
         PinLog.i("PinLink started")
+        Pipeline.resumePending(this)
     }
 }

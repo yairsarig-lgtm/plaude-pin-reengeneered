@@ -13,12 +13,29 @@ object OpusDecoder {
 
     data class Result(val wav: File, val frames: Int, val badFrames: Int, val sampleRate: Int, val seconds: Double)
 
+    /** Decoded audio: 16-bit mono PCM at [sampleRate] (the platform decoder emits 48 kHz). */
+    class Pcm(val samples: ShortArray, val sampleRate: Int, val frames: Int, val badFrames: Int) {
+        val seconds: Double get() = samples.size.toDouble() / sampleRate
+    }
+
     fun decodeToWav(packetFile: File, wavFile: File): Result {
+        val pcm = decodeToPcm(packetFile)
+        WavWriter(wavFile).use { wav ->
+            wav.sampleRate = pcm.sampleRate
+            wav.channels = PinConfig.OPUS_CHANNELS
+            val bytes = ByteBuffer.allocate(pcm.samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            bytes.asShortBuffer().put(pcm.samples)
+            wav.write(bytes.array())
+        }
+        PinLog.i("Decoded ${pcm.frames} frames -> ${wavFile.name}: %.1fs @ %d Hz".format(pcm.seconds, pcm.sampleRate))
+        return Result(wavFile, pcm.frames, pcm.badFrames, pcm.sampleRate, pcm.seconds)
+    }
+
+    fun decodeToPcm(packetFile: File): Pcm {
         val packets = OpusPacketFile.read(packetFile)
         val stream = packets.fold(java.io.ByteArrayOutputStream()) { acc, p -> acc.apply { write(p.bytes) } }.toByteArray()
         analyze(packets, stream)
-        val frames = FrameSplitter.fixed(stream, PinConfig.OPUS_FIXED_FRAME_BYTES)
-        return decodeFrames(frames, wavFile)
+        return decodeFrames(FrameSplitter.fixed(stream, PinConfig.OPUS_FIXED_FRAME_BYTES))
     }
 
     /** Logs the evidence needed to confirm or reject fixed-size framing. */
@@ -31,7 +48,7 @@ object OpusDecoder {
             if (tocs.isNotEmpty()) " -> ${OpusToc.describe(tocs.maxBy { it.value }.key)}" else "")
     }
 
-    private fun decodeFrames(frames: List<ByteArray>, wavFile: File): Result {
+    private fun decodeFrames(frames: List<ByteArray>): Pcm {
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, PinConfig.OPUS_SAMPLE_RATE, PinConfig.OPUS_CHANNELS).apply {
             setByteBuffer("csd-0", ByteBuffer.wrap(opusHead()))
             setByteBuffer("csd-1", nativeLong(0))              // pre-skip, ns
@@ -42,12 +59,12 @@ object OpusDecoder {
         codec.start()
 
         val info = MediaCodec.BufferInfo()
+        val out = java.io.ByteArrayOutputStream()
+        var sampleRate = PinConfig.OPUS_SAMPLE_RATE
         var next = 0
         var inputDone = false
         var badFrames = 0
-        WavWriter(wavFile).use { wav ->
-            wav.sampleRate = PinConfig.OPUS_SAMPLE_RATE
-            wav.channels = PinConfig.OPUS_CHANNELS
+        try {
             while (true) {
                 if (!inputDone) {
                     val idx = codec.dequeueInputBuffer(10_000)
@@ -63,33 +80,33 @@ object OpusDecoder {
                         }
                     }
                 }
-                val out = codec.dequeueOutputBuffer(info, 10_000)
+                val o = codec.dequeueOutputBuffer(info, 10_000)
                 when {
-                    out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val f = codec.outputFormat
-                        wav.sampleRate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                        wav.channels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                        PinLog.i("Decoder output format: $f")
+                    o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        sampleRate = codec.outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        PinLog.i("Decoder output format: ${codec.outputFormat}")
                     }
-                    out >= 0 -> {
+                    o >= 0 -> {
                         if (info.size > 0) {
                             val pcm = ByteArray(info.size)
-                            codec.getOutputBuffer(out)!!.apply { position(info.offset); get(pcm) }
-                            wav.write(pcm)
+                            codec.getOutputBuffer(o)!!.apply { position(info.offset); get(pcm) }
+                            out.write(pcm)
                         } else if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM == 0) {
                             badFrames++
                         }
-                        codec.releaseOutputBuffer(out, false)
+                        codec.releaseOutputBuffer(o, false)
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
                     }
                 }
             }
+        } finally {
             codec.stop()
             codec.release()
-            val secs = wav.dataBytes.toDouble() / (wav.sampleRate * wav.channels * 2).coerceAtLeast(1)
-            PinLog.i("Decoded ${frames.size} frames -> ${wavFile.name}: %.1fs @ %d Hz".format(secs, wav.sampleRate))
-            return Result(wavFile, frames.size, badFrames, wav.sampleRate, secs)
         }
+        val bytes = out.toByteArray()
+        val samples = ShortArray(bytes.size / 2)
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(samples)
+        return Pcm(samples, sampleRate, frames.size, badFrames)
     }
 
     private fun opusHead(): ByteArray = ByteBuffer.allocate(19).order(ByteOrder.LITTLE_ENDIAN).apply {

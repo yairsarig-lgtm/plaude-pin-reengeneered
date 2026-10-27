@@ -17,8 +17,11 @@ data, not yet tested.
   Unbound: writes are acked at ATT level, nothing comes back. After binding, a different app
   (PinLink) gets answers **without** sending cmd 1. **confirmed**
 - Notifications go to every app connected to the pin on the same phone (Android shares the link).
-- Pin drops the link (`status=19`) ~120 s after connect when idle. *hypothesis:* cmd 109 is a
-  keep-alive.
+- Pin drops the link (`status=19`, remote-initiated) ~120–125 s after **every** connect.
+  **Tested:** sending cmd 109 every 30 s does not prevent it (109 is acked but the drop still comes).
+  Untested hypothesis: the pin expects the cmd 1 auth handshake on each connection, as the Plaud app
+  does. PinLink instead reconnects within seconds and resumes interrupted transfers (cmd 28 start
+  offset), so the drop costs nothing but a few seconds.
 
 ## Framing — confirmed
 
@@ -59,7 +62,7 @@ frame starts with TOC `0xb8` (config 23: CELT wideband 20 ms, mono, code 0). 400
 | 30 | `sessionId u32` | cmd 31 `sessionId u32, 00` | stop sync |
 | 38 | `e8030000 00000000 e8030000` | — | sent at live start; ? |
 | 108 | — | name, zero-padded ("PLAUD NotePin") | device name |
-| 109 | `00` | `00` | keep-alive? |
+| 109 | `00` | `00` | ping? Does **not** stop the 120 s drop |
 | 112–117 | | | Plaud app uploads the owner's account token to the pin. **Never replicate.** |
 
 Omi's cmd 28 payload (three u64s) does not match what this firmware's own app sends (three u32s).
@@ -68,4 +71,7 @@ Omi's cmd 28 payload (three u64s) does not match what this firmware's own app se
 
 - **Connect:** CCCD → cmd 1 → 4 → 3 → 8×n → 108 → 25 → 3 → 24 → 8×n → 6 → 26 (list) → sync each listed file with 28 → 29 → 30/31.
 - **Button recording while connected:** pin sends 20 → app sends 3, 22, 28 (sid, 0, 0) → live audio from position ≈800 → pin sends 23 (size) and 29 → app backfills with 28 (sid, 0, firstLivePosition) → 30/31.
-- After a file is synced, it disappeared from the next list. Whether the pin deleted it or just hides synced files is unknown.
+- After a file is synced, it disappears from the next list (confirmed with PinLink's own syncs too);
+  files never fully synced stay listed. The list therefore works as an inbox of un-pulled memos.
+  Whether the pin deletes synced audio or only hides it is unknown.
+- cmd 26 gets no response while the pin is recording.

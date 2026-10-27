@@ -2,6 +2,7 @@ package com.yairsarig.pinlink
 
 import android.content.Context
 import com.yairsarig.pinlink.audio.OpusDecoder
+import com.yairsarig.pinlink.audio.OpusPacketFile
 import com.yairsarig.pinlink.audio.OpusPacketRecorder
 import com.yairsarig.pinlink.ble.LinkState
 import com.yairsarig.pinlink.ble.PinGattClient
@@ -52,7 +53,7 @@ class PinController(private val context: Context) {
     val storedFiles: StateFlow<List<PlaudProtocol.StoredFile>> = _storedFiles
 
     private val prefs = context.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
-    private val recordingsDir = File(context.getExternalFilesDir(null), PinConfig.DIR_RECORDINGS).apply { mkdirs() }
+    private val recordingsDir = Pipeline.recordingsDir(context)
     private val pendingResponses = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
     private val stampFmt = SimpleDateFormat(PinConfig.FILE_NAME_PATTERN, Locale.US)
 
@@ -79,6 +80,11 @@ class PinController(private val context: Context) {
         runCatching { connectOnce() }.onFailure { PinLog.e("Connect failed: ${it.message}") }
     }
 
+    /** Connects on launch if we've linked to a pin before and aren't linked already. */
+    fun autoConnect() {
+        if (client.state.value == LinkState.DISCONNECTED && prefs.contains(PinConfig.PREF_LAST_ADDRESS)) connect()
+    }
+
     fun disconnect() = scope.launch {
         userWantsLink = false
         reconnectJob?.cancel()
@@ -93,7 +99,7 @@ class PinController(private val context: Context) {
         client.connect(device)
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
         readBattery().join()
-        listFiles().join()
+        if (PinConfig.SYNC_ON_CONNECT) scope.launch { listFiles().join(); syncPending() }
     }
 
     private fun onUnexpectedDisconnect() {
@@ -159,8 +165,7 @@ class PinController(private val context: Context) {
     /** Pulls every file the pin lists. */
     fun syncAll() = scope.launch {
         listFiles().join()
-        for (f in _storedFiles.value) syncFile(f.sessionId, f.bytes)
-        listFiles().join()
+        syncPending()
     }
 
     /**
@@ -195,26 +200,50 @@ class PinController(private val context: Context) {
 
     // ---------- Transfers ----------
 
-    /** Pulls bytes [0, size) of a stored recording into `<start time>_sync.opuspk`. */
+    /**
+     * Pulls a stored recording into `<start time>_partial.opuspk`, resuming from whatever an
+     * earlier, interrupted attempt already got (the pin drops the link every ~2 minutes), and
+     * renames it to `_sync` once every byte is there.
+     */
     suspend fun syncFile(sessionId: Long, size: Long): Boolean = transferLock.withLock {
-        PinLog.i("Sync sid=$sessionId (${stamp(sessionId)}) $size B")
-        val rec = openRecorder(sessionId, "sync")
+        val partial = captureFile(sessionId, PinConfig.PARTIAL_SUFFIX)
+        val complete = captureFile(sessionId, PinConfig.SYNC_SUFFIX)
+        var have = OpusPacketFile.trimToContiguous(partial)
+        if (have == 0L) partial.delete()
+        if (have > size) { partial.delete(); have = 0 } // stale partial from a different file size
+        PinLog.i("Sync sid=$sessionId (${stamp(sessionId)}) $size B" + if (have > 0) ", resuming at $have" else "")
+        val rec = openRecorder(sessionId, partial, resumeFrom = have)
         val done = CompletableDeferred<Unit>().also { transferDone = it }
         val ack = runCatching {
-            command(PlaudCommand.SYNC_FILE_START, PlaudProtocol.syncFileStartPayload(sessionId, 0, size))
+            command(PlaudCommand.SYNC_FILE_START, PlaudProtocol.syncFileStartPayload(sessionId, have, size))
         }.getOrNull()
         if (ack == null || ack.getOrNull(4)?.toInt() != 0) {
             PinLog.e("Sync sid=$sessionId refused: ${ack?.toHex()}")
             closeRecorder()
             return false
         }
-        val timeout = PinConfig.SYNC_TIMEOUT_BASE_MS + size * 1000 / PinConfig.SYNC_MIN_BYTES_PER_SEC
+        val timeout = PinConfig.SYNC_TIMEOUT_BASE_MS + (size - have) * 1000 / PinConfig.SYNC_MIN_BYTES_PER_SEC
         val finished = withTimeoutOrNull(timeout) { runCatching { done.await() }.isSuccess } == true
         runCatching { command(PlaudCommand.STOP_SYNC, PlaudProtocol.stopSyncPayload(sessionId)) }
         closeRecorder()
-        val ok = finished && rec.bytes == size && rec.gaps == 0
-        PinLog.i("Sync sid=$sessionId ${if (ok) "OK" else "INCOMPLETE"}: got ${rec.bytes}/$size B, gaps=${rec.gaps}, finished=$finished")
+        val total = have + rec.bytes
+        val ok = finished && total == size && rec.gaps == 0
+        PinLog.i("Sync sid=$sessionId ${if (ok) "OK" else "INCOMPLETE"}: have $total/$size B, gaps=${rec.gaps}, finished=$finished")
+        if (ok) {
+            check(partial.renameTo(complete)) { "rename ${partial.name} failed" }
+            _lastCapture.value = complete
+            Pipeline.enqueueTranscription(context, complete, sessionId)
+        }
         ok
+    }
+
+    /** Pulls everything the pin still lists (it stops listing a file once it has been synced). */
+    private suspend fun syncPending() {
+        for (f in _storedFiles.value) {
+            if (client.state.value != LinkState.READY) return
+            syncFile(f.sessionId, f.bytes)
+        }
+        if (_storedFiles.value.isNotEmpty()) listFiles().join()
     }
 
     /** Follows a recording that is still running (end = 0), until the pin says it's done. */
@@ -287,8 +316,8 @@ class PinController(private val context: Context) {
                 PinLog.rx("[audio sid=${n.sessionId} pos=${n.position} len=${n.audio.size}] ${data.toHex()}", toUi)
             }
             is PinNotification.AudioEnd -> {
+                // Always followed by cmd 29, which is what completes the transfer.
                 PinLog.rx("[audio END sid=${n.sessionId}] ${data.toHex()}", true)
-                finishTransfer()
             }
             is PinNotification.CommandResponse -> {
                 PinLog.rx("[resp cmd=${n.cmdId}] ${data.toHex()}", true)
@@ -329,12 +358,17 @@ class PinController(private val context: Context) {
     private fun nowEpoch() = System.currentTimeMillis() / 1000
     private fun stamp(sessionId: Long): String = stampFmt.format(Date(sessionId * 1000))
 
+    private fun captureFile(sessionId: Long, suffix: String) =
+        File(recordingsDir, "${stamp(sessionId)}$suffix${PinConfig.RAW_PACKET_EXT}")
+
+    /** Fresh capture file (replaces any earlier copy). */
+    private fun openRecorder(sessionId: Long, kind: String): OpusPacketRecorder =
+        openRecorder(sessionId, captureFile(sessionId, "_$kind").apply { delete() })
+
     @Synchronized
-    private fun openRecorder(sessionId: Long, kind: String): OpusPacketRecorder {
+    private fun openRecorder(sessionId: Long, f: File, resumeFrom: Long = 0): OpusPacketRecorder {
         recorder?.close()
-        val f = File(recordingsDir, "${stamp(sessionId)}_$kind${PinConfig.RAW_PACKET_EXT}")
-        f.delete() // a re-sync replaces the earlier copy instead of appending to it
-        return OpusPacketRecorder(f).also {
+        return OpusPacketRecorder(f, resumeFrom).also {
             recorder = it
             recorderSession = sessionId
             audioPacketsSinceUiLog = 0
@@ -350,7 +384,8 @@ class PinController(private val context: Context) {
         recorderSession = null
         r.close()
         _recording.value = null
-        if (r.packets > 0) _lastCapture.value = r.file else r.file.delete()
+        if (r.packets > 0) _lastCapture.value = r.file
+        else if (!r.file.name.contains(PinConfig.PARTIAL_SUFFIX)) r.file.delete() // keep partials to resume
     }
 
     /** Decodes the newest capture to WAV next to it. */

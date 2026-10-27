@@ -47,6 +47,8 @@ object PinConfig {
     const val FOLLOW_BUTTON_RECORDINGS_LIVE = true
     /** Pull the complete file when the pin reports a recording stopped. */
     const val SYNC_ON_STOP = true
+    /** Pull everything the pin lists on every (re)connect. Interrupted pulls resume where they stopped. */
+    const val SYNC_ON_CONNECT = true
     /** Sync timeout = base + size / expected throughput. */
     const val SYNC_TIMEOUT_BASE_MS = 15_000L
     const val SYNC_MIN_BYTES_PER_SEC = 2_000L
@@ -75,6 +77,34 @@ object PinConfig {
     const val DIR_LOGS = "logs"
     const val RAW_PACKET_EXT = ".opuspk"
     const val WAV_EXT = ".wav"
+
+    const val DIR_TRANSCRIPTS = "transcripts"
+    const val DIR_MODELS = "models"
+    const val SYNC_SUFFIX = "_sync"
+    const val PARTIAL_SUFFIX = "_partial"
+    const val TRANSCRIPT_EXT = ".txt"
+    const val TRANSCRIPT_HEADER_PREFIX = "Recorded: "
+
+    // --- Transcription (whisper.cpp) ---
+    const val WHISPER_MODEL_FILE = "ggml-base.en.bin"
+    const val WHISPER_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+    const val WHISPER_MODEL_SHA256 = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+    const val WHISPER_MODEL_BYTES = 147_964_211L
+    const val WHISPER_SAMPLE_RATE = 16_000
+    const val WHISPER_LANGUAGE = "en"
+    const val WHISPER_MAX_THREADS = 4
+    const val LOG_TRANSCRIPT_CHARS = 120
+
+    // --- Drive upload ---
+    const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+    const val DRIVE_FOLDER = "Pin Inbox"
+    const val PREF_DRIVE_FOLDER_ID = "drive_folder_id"
+    const val UPLOADED_MARKER_EXT = ".uploaded"
+    const val HTTP_TIMEOUT_MS = 30_000
+
+    // --- Background work ---
+    const val WORK_BACKOFF_SECONDS = 30L
+    const val WORK_MAX_ATTEMPTS = 5
 
     // --- UI ---
     const val UI_LOG_LINES = 300

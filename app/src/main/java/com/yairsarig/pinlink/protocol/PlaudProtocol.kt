@@ -33,6 +33,7 @@ object PlaudCommand {
     const val SYNC_DONE = 29      // pin -> phone only
     const val STOP_SYNC = 30
     const val DEVICE_NAME = 108
+    const val PING = 109          // `00` -> `00`. Tested 2026-10-27: does NOT prevent the ~120 s drop
 
     /** Commands whose response arrives under a different cmdId. */
     private val responseIds = mapOf(24 to 33, 25 to 34, STOP_SYNC to 31, 112 to 113, 116 to 117)

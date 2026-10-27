@@ -69,7 +69,18 @@ Summary of what Omi's code does (verify against the source, don't trust this sum
 - **Codec:** Opus, 16 kHz mono, 320-sample frames (Omi calls it `opusFS320`). Omi re-chunks the stream into 80-byte pieces before decoding; figure out the real frame boundaries before relying on that.
 - **Known quirks:** the pin drops the connection randomly. Reconnect immediately and automatically.
 
-## The big open question (Phase 1 must answer it)
+> **Update 2026-10-27:** Phase 1 tested this on the owner's 2024 NotePin and captured the official
+> app's traffic. Several details above are wrong for this firmware (cmd 28 takes three **u32**s;
+> stop sync takes the sessionId; the 4 "unknown" audio header bytes are the sessionId; the pin must
+> be bound to a Plaud account once before it answers anything). **`docs/PROTOCOL.md` is the
+> authoritative reference now.**
+
+## The big open question (Phase 1 must answer it) — ANSWERED
+
+1. Yes: the pin sends cmd 20/23 events when its button starts/stops a recording, and the phone can
+   stream it live (cmd 28 with end=0) or pull it afterwards. 2. Yes: cmd 26 lists stored files,
+   cmd 28 pulls them. 3. Answered via HCI snoop. Binding: yes, the pin must be bound once via the
+   official app; after that PinLink works without the Plaud app running.
 
 Omi's flow is **phone-initiated live streaming**: the phone tells the pin to start recording and audio streams while the phone is connected. The owner wants **pin-initiated** memos: press the pin's own control, talk, done, phone possibly out of range.
 
@@ -86,12 +97,20 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 
 ## Roadmap
 
-- [ ] **Phase 1 — Prove the link (do first, highest risk).** Bare app: scan, connect, subscribe, log raw notifications as hex, read battery (cmd 9), run the live-session recipe, save raw Opus to a file. Then decode to WAV and play it back. Answer the open question above.
-- [ ] **Phase 2 — Stored-file sync** (depends on Phase 1 findings).
+- [x] **Phase 1 — Prove the link (do first, highest risk).** Bare app: scan, connect, subscribe, log raw notifications as hex, read battery (cmd 9), run the live-session recipe, save raw Opus to a file. Then decode to WAV and play it back. Answer the open question above.
+- [x] **Phase 2 — Stored-file sync.** List (cmd 26), sync (cmd 28), auto-sync on button stop and on every (re)connect, resume interrupted transfers from the last byte. The pin's list only shows un-pulled files, so it is the "what's left" record.
 - [ ] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
 - [ ] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
 - [ ] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
 - [ ] **Phase 6 — Polish.** Status screen: connection state, battery, queue counts, last upload. Notification when a memo is uploaded.
+
+## Backlog
+
+- Later: find a command to change or soften the pin's vibration.
+- Low priority: phone-initiated "Start live" is slow and also makes the pin record. Works.
+- The pin drops the link ~2 min after every connect (cmd 109 is not a keep-alive). Harmless now
+  (auto-reconnect + resumable sync). Could test whether sending cmd 1 per connection stops it, but
+  that needs the bind token stored on the phone — owner's call.
 
 ## Working agreements for Claude Code
 

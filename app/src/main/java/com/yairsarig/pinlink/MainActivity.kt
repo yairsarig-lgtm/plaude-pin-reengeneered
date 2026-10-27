@@ -7,7 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import com.yairsarig.pinlink.upload.DriveAuth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -59,7 +61,39 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         PinLog.i("Permissions: $r")
-        if (hasPermissions()) PinLinkService.start(this)
+        if (hasPermissions()) onPermissionsReady()
+    }
+
+    private fun onPermissionsReady() {
+        PinLinkService.start(this)
+        controller.autoConnect()
+    }
+
+    private val driveConnected = androidx.compose.runtime.mutableStateOf<Boolean?>(null)
+
+    private val consentLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        val outcome = runCatching { DriveAuth.fromConsentResult(this, r.data) }
+        driveConnected.value = outcome.getOrNull() is DriveAuth.Outcome.Token
+        PinLog.i(if (driveConnected.value == true) "Drive connected" else "Drive consent not granted: ${outcome.exceptionOrNull()?.message ?: "cancelled"}")
+        if (driveConnected.value == true) Pipeline.resumePending(this)
+    }
+
+    /** Checks Drive access; with [interactive] shows Google's consent screen if needed. */
+    private fun connectDrive(interactive: Boolean) {
+        DriveAuth.authorizeAsync(this) { result ->
+            result.onSuccess { outcome ->
+                when (outcome) {
+                    is DriveAuth.Outcome.Token -> driveConnected.value = true
+                    is DriveAuth.Outcome.NeedsConsent -> {
+                        driveConnected.value = false
+                        if (interactive) consentLauncher.launch(IntentSenderRequest.Builder(outcome.intent.intentSender).build())
+                    }
+                }
+            }.onFailure {
+                driveConnected.value = false
+                PinLog.e("Drive authorization failed: ${it.message}")
+            }
+        }
     }
 
     private fun hasPermissions() = requiredPermissions.all {
@@ -68,7 +102,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (hasPermissions()) PinLinkService.start(this) else permissionLauncher.launch(requiredPermissions)
+        if (hasPermissions()) onPermissionsReady() else permissionLauncher.launch(requiredPermissions)
+        connectDrive(interactive = false)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(Modifier.fillMaxSize()) { Screen() }
@@ -99,6 +134,7 @@ class MainActivity : ComponentActivity() {
             Text("Link: $link   Battery: ${battery?.let { "${it.percent}%${if (it.charging) " ⚡" else ""}" } ?: "?"}")
             Text("Recording: ${recording ?: "-"}")
             Text("Last capture: ${lastCapture?.name ?: "-"}")
+            Text("Drive: ${when (driveConnected.value) { true -> "connected"; false -> "not connected"; null -> "checking…" }}")
             Text("On pin: ${stored.size} file(s), ${stored.sumOf { it.bytes } / PinConfig.OPUS_BYTES_PER_SEC}s")
 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -112,6 +148,7 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { controller.startLiveSession() }) { Text("Start live") }
                 Button(onClick = { controller.stopLiveSession() }) { Text("Stop live") }
                 Button(onClick = { scope.launch { decodeAndPlay() } }) { Text("Decode + play") }
+                Button(onClick = { connectDrive(interactive = true) }) { Text("Connect Drive") }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
