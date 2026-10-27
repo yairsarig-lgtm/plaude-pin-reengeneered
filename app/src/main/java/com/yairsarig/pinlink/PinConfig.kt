@@ -5,6 +5,8 @@ import java.util.UUID
 /** Every tunable value in the app lives here. */
 object PinConfig {
     const val LOG_TAG = "PINLINK"
+    /** User-facing name (package and log tag stay pinlink: the OAuth client is tied to the package). */
+    const val APP_NAME = "Pocket Ideas"
 
     // --- Discovery ---
     const val NAME_PREFIX = "plaud"
@@ -106,6 +108,19 @@ object PinConfig {
     const val PREF_DRIVE_FOLDER_ID = "drive_folder_id"
     const val UPLOADED_MARKER_EXT = ".uploaded"
     const val HTTP_TIMEOUT_MS = 30_000
+
+    // --- Ideas sheet (app-owned "Pin Ideas"; the hourly Claude task writes it, the app reads/deletes) ---
+    const val SHEET_TITLE = "Pin Ideas"
+    const val SHEET_TAB_IDEAS = "Ideas"
+    const val SHEET_TAB_LOG = "Log"
+    val SHEET_IDEAS_HEADERS = listOf("Recorded", "Idea", "List", "Original wording", "Status", "Source file")
+    val SHEET_LOG_HEADERS = listOf("Processed", "Source file", "Transcript", "Action taken", "Result")
+    const val PREF_SHEET_ID = "sheet_id"
+    /** An idea "needs review" when its Status contains this (case-insensitive). */
+    const val STATUS_NEEDS_REVIEW = "review"
+    const val RECENT_ACTIONS = 10
+    const val UNDO_WINDOW_MS = 5_000L
+    const val SHEET_URL_PREFIX = "https://docs.google.com/spreadsheets/d/"
 
     // --- Housekeeping ---
     /** Local copies are deleted this long after their transcript reached Drive. */

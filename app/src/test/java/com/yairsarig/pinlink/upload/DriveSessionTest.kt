@@ -14,7 +14,7 @@ class DriveSessionTest {
 
     private fun token(t: String) = DriveAuth.Outcome.Token(t)
     private val consent = DriveAuth.Outcome.NeedsConsent(intent = null)
-    private val unauthorized = DriveClient.HttpException(401, "invalid authentication credentials")
+    private val unauthorized = GoogleHttpException(401, "invalid authentication credentials")
 
     @Test fun okPassesThrough() {
         assertEquals(DriveSession.Result.Ok("id1"), session(token("a")).run { "id1" })
@@ -46,9 +46,9 @@ class DriveSessionTest {
         assertEquals(DriveSession.Result.NeedsConsent, r)
     }
 
-    @Test(expected = DriveClient.HttpException::class)
+    @Test(expected = GoogleHttpException::class)
     fun otherHttpErrorsPropagateForNormalRetry() {
-        session(token("a")).run<String> { throw DriveClient.HttpException(503, "backend") }
+        session(token("a")).run<String> { throw GoogleHttpException(503, "backend") }
     }
 
     @Test(expected = IOException::class)

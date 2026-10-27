@@ -1,37 +1,18 @@
 package com.yairsarig.pinlink
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import android.content.Intent
-import androidx.compose.material3.Card
-import androidx.compose.ui.text.font.FontWeight
-import com.yairsarig.pinlink.housekeeping.DeviceSetup
-import com.yairsarig.pinlink.upload.DriveAuth
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,16 +20,29 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yairsarig.pinlink.ble.LinkState
 import com.yairsarig.pinlink.ble.WriteMode
+import com.yairsarig.pinlink.housekeeping.DeviceSetup
 import com.yairsarig.pinlink.protocol.hexToBytes
+import com.yairsarig.pinlink.transcribe.ModelManager
+import com.yairsarig.pinlink.ui.HomeScreen
+import com.yairsarig.pinlink.ui.IdeasViewModel
+import com.yairsarig.pinlink.ui.PinStatus
+import com.yairsarig.pinlink.ui.PocketTheme
+import com.yairsarig.pinlink.ui.SettingsActions
+import com.yairsarig.pinlink.ui.SettingsScreen
+import com.yairsarig.pinlink.ui.SettingsUi
+import com.yairsarig.pinlink.upload.DriveAuth
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
+/** Pocket Ideas: the ideas list, with everything else behind ⚙️. Also hosts permission and Drive-consent flows. */
 class MainActivity : ComponentActivity() {
     private val controller by lazy { (application as PinLinkApp).controller }
     private var player: MediaPlayer? = null
@@ -73,7 +67,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private val setup by lazy { DeviceSetup(this) }
-    private val setupSteps = androidx.compose.runtime.mutableStateOf<List<DeviceSetup.Step>>(emptyList())
+    private val setupSteps = mutableStateOf<List<DeviceSetup.Step>>(emptyList())
+    /** Bumped whenever Drive access is (re)granted, so the ideas list reloads. */
+    private val driveGrants = mutableStateOf(0)
 
     override fun onResume() {
         super.onResume()
@@ -93,7 +89,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
     private val consentLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         val outcome = runCatching { DriveAuth.fromConsentResult(this, r.data) }
         DriveAuth.setConnected(outcome.getOrNull() is DriveAuth.Outcome.Token)
@@ -101,6 +96,7 @@ class MainActivity : ComponentActivity() {
         if (DriveAuth.connected.value == true) {
             Notifications.clearDriveReconnect(this)
             Pipeline.resumePending(this)
+            driveGrants.value++
         }
     }
 
@@ -129,14 +125,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         if (hasPermissions()) onPermissionsReady() else permissionLauncher.launch(requiredPermissions)
         connectDrive(interactive = false)
         handleIntent(intent)
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(Modifier.fillMaxSize()) { Screen() }
-            }
-        }
+        setContent { PocketTheme { App() } }
     }
 
     override fun onDestroy() {
@@ -144,75 +137,71 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    @OptIn(ExperimentalLayoutApi::class)
     @Composable
-    private fun Screen() {
+    private fun App() {
+        val ideas: IdeasViewModel = viewModel()
+        val ideasState by ideas.state.collectAsStateWithLifecycle()
         val link by controller.linkState.collectAsStateWithLifecycle()
-        val battery by controller.battery.collectAsStateWithLifecycle()
-        val recording by controller.recording.collectAsStateWithLifecycle()
-        val lastCapture by controller.lastCapture.collectAsStateWithLifecycle()
-        val log by PinLog.lines.collectAsStateWithLifecycle()
-        val stored by controller.storedFiles.collectAsStateWithLifecycle()
-        val driveConnected by DriveAuth.connected.collectAsStateWithLifecycle()
+        val transfer by controller.recording.collectAsStateWithLifecycle()
         val pinRecording by controller.pinRecording.collectAsStateWithLifecycle()
-        val busy = pinRecording || recording != null
+        val stored by controller.storedFiles.collectAsStateWithLifecycle()
+        val battery by controller.battery.collectAsStateWithLifecycle()
+        val driveConnected by DriveAuth.connected.collectAsStateWithLifecycle()
+        val log by PinLog.lines.collectAsStateWithLifecycle()
+        val grants by driveGrants
+        var showSettings by remember { mutableStateOf(false) }
+        var pipeline by remember { mutableStateOf(Pipeline.Status(0, 0)) }
         val scope = rememberCoroutineScope()
-        var cmdId by remember { mutableStateOf("") }
-        var payload by remember { mutableStateOf("") }
-        var writeMode by remember { mutableStateOf(WriteMode.AUTO) }
 
-        Column(Modifier.safeDrawingPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Link: $link   Battery: ${battery?.let { "${it.percent}%${if (it.charging) " ⚡" else ""}" } ?: "?"}")
-            Text("Recording: ${recording ?: "-"}")
-            Text("Last capture: ${lastCapture?.name ?: "-"}")
-            Text("Drive: ${when (driveConnected) { true -> "connected"; false -> "not connected"; null -> "checking…" }}")
-            Text("On pin: ${stored.size} file(s), ${stored.sumOf { it.bytes } / PinConfig.OPUS_BYTES_PER_SEC}s")
+        // Cheap file scan; drives the amber dot and the Transcription section.
+        LaunchedEffect(Unit) {
+            while (true) {
+                pipeline = withContext(Dispatchers.IO) { Pipeline.status(this@MainActivity) }
+                delay(STATUS_POLL_MS)
+            }
+        }
+        LaunchedEffect(grants) { if (grants > 0) ideas.refresh() }
 
-            for (step in setupSteps.value) {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(8.dp)) {
-                        Text("Setup: ${step.title}", fontWeight = FontWeight.Bold)
-                        Text(step.why, fontSize = 12.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { setup.open(step) }) { Text("Open settings") }
-                            if (step != DeviceSetup.Step.BATTERY_EXEMPTION) {
-                                Button(onClick = { setup.confirm(step); setupSteps.value = setup.pendingSteps() }) { Text("Done") }
-                            }
-                        }
-                    }
-                }
-            }
+        val busy = pinRecording || transfer != null
+        val status = when {
+            link != LinkState.READY -> PinStatus.DISCONNECTED
+            busy || stored.isNotEmpty() || pipeline.pending > 0 -> PinStatus.SYNCING
+            else -> PinStatus.CONNECTED
+        }
 
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(onClick = { controller.connect() }) { Text("Connect") }
-                Button(onClick = { controller.disconnect() }) { Text("Disconnect") }
-                Button(onClick = { controller.forgetPin() }) { Text("Forget") }
-                Button(onClick = { controller.readBattery() }) { Text("Battery") }
-                Button(onClick = { controller.runDiagnostics() }) { Text("Diagnose") }
-                Button(onClick = { controller.listFiles() }) { Text("List files") }
-                Button(onClick = { controller.syncAll() }) { Text("Sync all") }
-                Button(onClick = { controller.startLiveSession() }) { Text("Start live") }
-                Button(onClick = { controller.stopLiveSession() }) { Text("Stop live") }
-                Button(onClick = { scope.launch { decodeAndPlay() } }, enabled = !busy && lastCapture != null) {
-                    Text(if (busy) "Play (busy)" else "Play " + (lastCapture?.name?.take(PinConfig.FILE_NAME_PATTERN.length) ?: "-"))
-                }
-                Button(onClick = { connectDrive(interactive = true) }) { Text("Connect Drive") }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(cmdId, { cmdId = it }, Modifier.weight(0.25f), label = { Text("cmd") }, singleLine = true)
-                OutlinedTextField(payload, { payload = it }, Modifier.weight(0.55f), label = { Text("payload hex") }, singleLine = true)
-                Button(onClick = { sendRaw(cmdId, payload, writeMode) }, Modifier.weight(0.2f)) { Text("Send") }
-            }
-            Button(onClick = { writeMode = WriteMode.entries[(writeMode.ordinal + 1) % WriteMode.entries.size] }) {
-                Text("Console write: $writeMode")
-            }
-
-            val listState = rememberLazyListState()
-            LaunchedEffect(log.size) { if (log.isNotEmpty()) listState.scrollToItem(log.size - 1) }
-            LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState) {
-                items(log) { Text(it, fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 12.sp) }
-            }
+        if (showSettings) {
+            BackHandler { showSettings = false }
+            SettingsScreen(
+                SettingsUi(link, battery, stored.size, busy, driveConnected, ideas.sheetId, setupSteps.value,
+                    ModelManager(this).isReady, pipeline, controller.recordingsOnPhone(), log),
+                SettingsActions(
+                    back = { showSettings = false },
+                    syncNow = controller::syncNow,
+                    disconnect = { controller.disconnect() },
+                    forget = controller::forgetPin,
+                    reconnectDrive = { connectDrive(interactive = true) },
+                    openSheet = { ideas.sheetId?.let { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PinConfig.SHEET_URL_PREFIX + it))) } },
+                    openSetup = setup::open,
+                    confirmSetup = { setup.confirm(it); setupSteps.value = setup.pendingSteps() },
+                    diagnose = { controller.runDiagnostics() },
+                    play = { f -> scope.launch { play(f) } },
+                    startLive = { controller.startLiveSession() },
+                    stopLive = { controller.stopLiveSession() },
+                    sendRaw = ::sendRaw,
+                ),
+            )
+        } else {
+            HomeScreen(
+                state = ideasState,
+                pinStatus = status,
+                onSyncNow = controller::syncNow,
+                onOpenSettings = { showSettings = true },
+                onRefresh = ideas::refresh,
+                onDelete = ideas::delete,
+                onUndo = ideas::undo,
+                onFilter = ideas::setFilter,
+                onReconnectDrive = { connectDrive(interactive = true) },
+            )
         }
     }
 
@@ -222,13 +211,17 @@ class MainActivity : ComponentActivity() {
         if (id == null || bytes == null) PinLog.w("Bad cmd/payload: '$cmd' '$hex'") else controller.sendRaw(id, bytes, mode)
     }
 
-    private suspend fun decodeAndPlay() {
-        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { controller.decodeLast() } ?: return
+    private suspend fun play(capture: File) {
+        val result = withContext(Dispatchers.IO) { controller.decode(capture) } ?: return
         player?.release()
         player = MediaPlayer().apply {
             setDataSource(result.wav.absolutePath)
             prepare()
             start()
         }
+    }
+
+    private companion object {
+        const val STATUS_POLL_MS = 3_000L
     }
 }

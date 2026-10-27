@@ -49,7 +49,7 @@ class DeviceSetup(private val context: Context) {
                 Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")))
             Step.XIAOMI_NO_RESTRICTIONS -> listOf(
                 Intent().setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"))
-                    .putExtra("package_name", pkg).putExtra("package_label", "PinLink"))
+                    .putExtra("package_name", pkg).putExtra("package_label", PinConfig.APP_NAME))
         } + Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg"))
 
         for (intent in candidates) {

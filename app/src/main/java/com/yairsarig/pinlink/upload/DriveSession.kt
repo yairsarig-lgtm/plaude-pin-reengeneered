@@ -25,7 +25,7 @@ class DriveSession(
             }
             try {
                 return Result.Ok(block(token))
-            } catch (e: DriveClient.HttpException) {
+            } catch (e: GoogleHttpException) {
                 if (e.code != HTTP_UNAUTHORIZED) throw e
                 runCatching { clearToken(token) }
             }

@@ -228,6 +228,11 @@ class PinController(private val context: Context) {
             files.joinToString("") { "\n  ${stamp(it.sessionId)} sid=${it.sessionId} ${it.bytes} B (~${it.bytes / PinConfig.OPUS_BYTES_PER_SEC}s) flags=${it.flags}" })
     }
 
+    /** The header's pin button: connect if needed (connecting syncs), else pull whatever is pending. */
+    fun syncNow() {
+        if (client.state.value == LinkState.READY) syncAll() else connect()
+    }
+
     /** Pulls every file the pin lists. */
     fun syncAll() = scope.launch {
         listFiles().join()
@@ -465,9 +470,16 @@ class PinController(private val context: Context) {
      * Decodes the newest *completed* capture to WAV next to it. Refused while the pin is recording
      * or a transfer is open: the playback would be an older memo, and the pin would record it.
      */
-    suspend fun decodeLast(): OpusDecoder.Result? {
+    suspend fun decodeLast(): OpusDecoder.Result? =
+        _lastCapture.value?.let { decode(it) } ?: null.also { PinLog.w("Nothing captured yet") }
+
+    /** Completed captures on the phone, newest first (for Settings > Developer). */
+    fun recordingsOnPhone(): List<File> = recordingsDir.listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }
+        .orEmpty().sortedByDescending { it.name }
+
+    /** Decodes [src] to a WAV next to it; refused while busy (see [decodeLast]). */
+    suspend fun decode(src: File): OpusDecoder.Result? {
         if (_pinRecording.value || _recording.value != null) return null.also { PinLog.w("Not playing back while recording/transferring") }
-        val src = _lastCapture.value ?: return null.also { PinLog.w("Nothing captured yet") }
         val wav = File(src.parentFile, src.name.removeSuffix(PinConfig.RAW_PACKET_EXT) + PinConfig.WAV_EXT)
         return runCatching { OpusDecoder.decodeToWav(src, wav) }
             .onFailure { PinLog.e("Decode failed", it) }.getOrNull()

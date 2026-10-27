@@ -56,6 +56,23 @@ object Pipeline {
         WorkManager.getInstance(context).enqueueUniqueWork("upload-$sessionId", policy, req)
     }
 
+    /** Memos on the phone not yet through the pipeline (for the status dot and Settings). */
+    data class Status(val toTranscribe: Int, val toUpload: Int) {
+        val pending: Int get() = toTranscribe + toUpload
+    }
+
+    fun status(context: Context): Status {
+        val captures = recordingsDir(context).listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }.orEmpty()
+        var transcribe = 0
+        var upload = 0
+        for (c in captures) {
+            val sid = sessionIdOf(c) ?: continue
+            val t = transcriptFile(context, sid)
+            if (!t.exists()) transcribe++ else if (!uploadedMarker(t).exists()) upload++
+        }
+        return Status(transcribe, upload)
+    }
+
     /** Re-queues anything a crash or reboot left half-way. Safe to call any time (app start, after Connect Drive). */
     fun resumePending(context: Context) {
         val captures = recordingsDir(context).listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }.orEmpty()

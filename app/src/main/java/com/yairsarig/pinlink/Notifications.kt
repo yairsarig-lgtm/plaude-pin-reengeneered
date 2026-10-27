@@ -26,7 +26,7 @@ object Notifications {
     fun service(context: Context): Notification =
         Notification.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("PinLink")
+            .setContentTitle(PinConfig.APP_NAME)
             .setContentText("Listening to the pin")
             .setContentIntent(openApp(context, connectDrive = false))
             .setOngoing(true)
@@ -36,7 +36,7 @@ object Notifications {
     fun driveReconnect(context: Context) {
         val n = Notification.Builder(context, CHANNEL_ALERTS)
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle("PinLink can't upload to Drive")
+            .setContentTitle("${PinConfig.APP_NAME} can't upload to Drive")
             .setContentText("Tap to reconnect Google Drive. Memos are kept until then.")
             .setContentIntent(openApp(context, connectDrive = true))
             .setAutoCancel(true)
