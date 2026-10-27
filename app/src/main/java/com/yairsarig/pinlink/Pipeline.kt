@@ -56,17 +56,14 @@ object Pipeline {
         WorkManager.getInstance(context).enqueueUniqueWork("upload-$sessionId", policy, req)
     }
 
-    /**
-     * Re-queues anything a crash or reboot left half-way, and re-checks every uploaded transcript's
-     * placement in Drive. Safe to call any time (app start, after Connect Drive).
-     */
+    /** Re-queues anything a crash or reboot left half-way. Safe to call any time (app start, after Connect Drive). */
     fun resumePending(context: Context) {
         val captures = recordingsDir(context).listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }.orEmpty()
         for (c in captures) {
             val sid = sessionIdOf(c) ?: continue
             val transcript = transcriptFile(context, sid)
             if (!transcript.exists()) enqueueTranscription(context, c, sid)
-            else enqueueUpload(context, sid, ExistingWorkPolicy.REPLACE)
+            else if (!uploadedMarker(transcript).exists()) enqueueUpload(context, sid, ExistingWorkPolicy.REPLACE)
         }
     }
 

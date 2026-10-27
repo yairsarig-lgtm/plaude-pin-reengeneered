@@ -49,6 +49,9 @@ class PinController(private val context: Context) {
     val recording: StateFlow<String?> = _recording
     private val _lastCapture = MutableStateFlow<File?>(null)
     val lastCapture: StateFlow<File?> = _lastCapture
+    /** True while the pin is recording (button or live session), between its start and stop events. */
+    private val _pinRecording = MutableStateFlow(false)
+    val pinRecording: StateFlow<Boolean> = _pinRecording
     private val _storedFiles = MutableStateFlow<List<PlaudProtocol.StoredFile>>(emptyList())
     val storedFiles: StateFlow<List<PlaudProtocol.StoredFile>> = _storedFiles
 
@@ -104,6 +107,7 @@ class PinController(private val context: Context) {
 
     private fun onUnexpectedDisconnect() {
         PinLog.w("Link dropped")
+        _pinRecording.value = false
         liveSessionId = null
         transferDone?.cancel()
         closeRecorder()
@@ -272,6 +276,7 @@ class PinController(private val context: Context) {
                     ?.let(PlaudProtocol::decodeStartRecord) ?: return@repeat
                 PinLog.i("Recording started on pin: sid=${started.sessionId} (${stamp(started.sessionId)})")
                 liveSessionId = started.sessionId
+                _pinRecording.value = true
                 delay(PinConfig.START_TO_SYNC_DELAY_MS)
                 followLive(started.sessionId).join()
                 if (recorder != null) return@launch
@@ -285,6 +290,7 @@ class PinController(private val context: Context) {
     fun stopLiveSession() = scope.launch {
         val id = liveSessionId ?: return@launch PinLog.w("No live session")
         liveSessionId = null
+        _pinRecording.value = false
         val stopped = runCatching { command(PlaudCommand.STOP_RECORD, PlaudProtocol.stopRecordPayload(id)) }
             .onFailure { PinLog.e("Stop failed", it) }.getOrNull()?.let(PlaudProtocol::decodeStopRecord)
         PinLog.i("Recording stopped: $stopped")
@@ -333,10 +339,12 @@ class PinController(private val context: Context) {
         when (cmdId) {
             PlaudCommand.START_RECORD -> PlaudProtocol.decodeStartRecord(payload)?.let {
                 PinLog.i("Pin button: recording started sid=${it.sessionId} (${stamp(it.sessionId)})")
+                _pinRecording.value = true
                 if (PinConfig.FOLLOW_BUTTON_RECORDINGS_LIVE) followLive(it.sessionId)
             }
             PlaudCommand.STOP_RECORD -> PlaudProtocol.decodeStopRecord(payload)?.let {
                 PinLog.i("Pin button: recording stopped sid=${it.sessionId}, ${it.bytes} B (~${it.bytes / PinConfig.OPUS_BYTES_PER_SEC}s)")
+                _pinRecording.value = false
                 onRecordingStopped(it)
             }
             PlaudCommand.SYNC_DONE -> {
@@ -388,8 +396,12 @@ class PinController(private val context: Context) {
         else if (!r.file.name.contains(PinConfig.PARTIAL_SUFFIX)) r.file.delete() // keep partials to resume
     }
 
-    /** Decodes the newest capture to WAV next to it. */
+    /**
+     * Decodes the newest *completed* capture to WAV next to it. Refused while the pin is recording
+     * or a transfer is open: the playback would be an older memo, and the pin would record it.
+     */
     suspend fun decodeLast(): OpusDecoder.Result? {
+        if (_pinRecording.value || _recording.value != null) return null.also { PinLog.w("Not playing back while recording/transferring") }
         val src = _lastCapture.value ?: return null.also { PinLog.w("Nothing captured yet") }
         val wav = File(src.parentFile, src.name.removeSuffix(PinConfig.RAW_PACKET_EXT) + PinConfig.WAV_EXT)
         return runCatching { OpusDecoder.decodeToWav(src, wav) }

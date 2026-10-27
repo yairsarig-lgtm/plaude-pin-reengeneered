@@ -1,6 +1,7 @@
 package com.yairsarig.pinlink
 
 import android.app.Application
+import com.yairsarig.pinlink.housekeeping.CleanupWorker
 import java.io.File
 
 class PinLinkApp : Application() {
@@ -12,6 +13,8 @@ class PinLinkApp : Application() {
         PinLog.init(File(getExternalFilesDir(null), PinConfig.DIR_LOGS))
         controller = PinController(this)
         PinLog.i("PinLink started")
+        Notifications.createChannels(this)
         Pipeline.resumePending(this)
+        CleanupWorker.schedule(this)
     }
 }

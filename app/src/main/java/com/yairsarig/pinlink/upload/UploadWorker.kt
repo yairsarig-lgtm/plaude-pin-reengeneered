@@ -3,6 +3,7 @@ package com.yairsarig.pinlink.upload
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.yairsarig.pinlink.Notifications
 import com.yairsarig.pinlink.PinConfig
 import com.yairsarig.pinlink.PinLog
 import com.yairsarig.pinlink.Pipeline
@@ -20,6 +21,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val sessionId = inputData.getLong(Pipeline.KEY_SESSION_ID, -1).takeIf { it > 0 } ?: return@withContext Result.failure()
         val transcript = Pipeline.transcriptFile(applicationContext, sessionId)
         val marker = Pipeline.uploadedMarker(transcript)
+        // Once uploaded, a transcript belongs to the downstream processor, which moves it out of the
+        // inbox (e.g. to "Pin Done"). Never touch it again.
+        if (marker.exists()) return@withContext Result.success()
         if (!transcript.exists()) return@withContext Result.failure().also { PinLog.e("Upload: ${transcript.name} missing") }
 
         try {
@@ -27,22 +31,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 is DriveAuth.Outcome.Token -> auth.accessToken
                 is DriveAuth.Outcome.NeedsConsent -> {
                     // Retrying can't help; Connect Drive re-queues everything pending.
-                    PinLog.w("Upload ${transcript.name}: Drive not connected — open PinLink and tap Connect Drive")
+                    PinLog.w("Upload ${transcript.name}: Drive not connected — notifying")
+                    Notifications.driveReconnect(applicationContext)
                     return@withContext Result.failure()
                 }
             }
+            Notifications.clearDriveReconnect(applicationContext)
             val drive = DriveClient(token)
             val prefs = applicationContext.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
             val folderId = drive.findOrCreateFolder(PinConfig.DRIVE_FOLDER, prefs.getString(PinConfig.PREF_DRIVE_FOLDER_ID, null))
             prefs.edit().putString(PinConfig.PREF_DRIVE_FOLDER_ID, folderId).apply()
 
-            if (marker.exists()) {
-                // Already uploaded: just make sure it sits in the inbox folder.
-                val id = marker.readText().trim()
-                val moved = drive.ensureInFolder(id, folderId)
-                PinLog.i("Upload ${transcript.name}: already uploaded ($id)" + if (moved) ", moved into ${PinConfig.DRIVE_FOLDER}" else ", in ${PinConfig.DRIVE_FOLDER}")
-                return@withContext Result.success()
-            }
             val existing = drive.findFile(folderId, transcript.name)
             val id = existing ?: drive.uploadText(folderId, transcript.name, transcript.readText())
             drive.ensureInFolder(id, folderId)

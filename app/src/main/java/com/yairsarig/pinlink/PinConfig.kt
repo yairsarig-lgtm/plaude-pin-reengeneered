@@ -81,6 +81,7 @@ object PinConfig {
     const val DIR_TRANSCRIPTS = "transcripts"
     const val DIR_MODELS = "models"
     const val SYNC_SUFFIX = "_sync"
+    const val LIVE_SUFFIX = "_live"
     const val PARTIAL_SUFFIX = "_partial"
     const val TRANSCRIPT_EXT = ".txt"
     const val TRANSCRIPT_HEADER_PREFIX = "Recorded: "
@@ -101,6 +102,11 @@ object PinConfig {
     const val PREF_DRIVE_FOLDER_ID = "drive_folder_id"
     const val UPLOADED_MARKER_EXT = ".uploaded"
     const val HTTP_TIMEOUT_MS = 30_000
+
+    // --- Housekeeping ---
+    /** Local copies are deleted this long after their transcript reached Drive. */
+    const val RETENTION_DAYS = 7L
+    val XIAOMI_MANUFACTURERS = setOf("xiaomi", "redmi", "poco")
 
     // --- Background work ---
     const val WORK_BACKOFF_SECONDS = 30L

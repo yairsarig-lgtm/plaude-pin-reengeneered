@@ -104,6 +104,21 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - [ ] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
 - [ ] **Phase 6 — Polish.** Status screen: connection state, battery, queue counts, last upload. Notification when a memo is uploaded.
 
+## Device notes (owner's phone: Xiaomi, HyperOS)
+
+- HyperOS kills background apps and drops broadcasts (boot, app-update) to apps that aren't
+  running unless **Autostart** is on and **Battery saver → No restrictions** is set for PinLink.
+  The app shows a setup checklist for both plus Android's battery-optimization exemption.
+  Neither Xiaomi setting can be read by apps, so the owner confirms them with "Done".
+- Verified 2026-10-27: with Autostart off, MY_PACKAGE_REPLACED never reached the app.
+
+## Drive contract
+
+- PinLink only ever **creates** files in `Pin Inbox`. After upload a transcript belongs to the
+  downstream Claude task, which moves it to `Pin Done`. The app must never move, rename or
+  re-upload a file it has already uploaded (a 2026-10-27 "placement repair" did, and pulled
+  processed files back into the inbox).
+
 ## Backlog
 
 - Google Cloud: OAuth client is the Android type for `com.yairsarig.pinlink` + this PC's debug

@@ -9,6 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import androidx.compose.material3.Card
+import androidx.compose.ui.text.font.FontWeight
+import com.yairsarig.pinlink.housekeeping.DeviceSetup
 import com.yairsarig.pinlink.upload.DriveAuth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -65,8 +69,28 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onPermissionsReady() {
-        PinLinkService.start(this)
-        controller.autoConnect()
+        PinLinkService.start(this) // the service auto-connects
+    }
+
+    private val setup by lazy { DeviceSetup(this) }
+    private val setupSteps = androidx.compose.runtime.mutableStateOf<List<DeviceSetup.Step>>(emptyList())
+
+    override fun onResume() {
+        super.onResume()
+        setupSteps.value = setup.pendingSteps() // re-check after returning from a settings screen
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** The "reconnect Drive" notification opens us with EXTRA_CONNECT_DRIVE. */
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(Notifications.EXTRA_CONNECT_DRIVE, false) == true) {
+            intent.removeExtra(Notifications.EXTRA_CONNECT_DRIVE)
+            connectDrive(interactive = true)
+        }
     }
 
     private val driveConnected = androidx.compose.runtime.mutableStateOf<Boolean?>(null)
@@ -75,7 +99,10 @@ class MainActivity : ComponentActivity() {
         val outcome = runCatching { DriveAuth.fromConsentResult(this, r.data) }
         driveConnected.value = outcome.getOrNull() is DriveAuth.Outcome.Token
         PinLog.i(if (driveConnected.value == true) "Drive connected" else "Drive consent not granted: ${outcome.exceptionOrNull()?.message ?: "cancelled"}")
-        if (driveConnected.value == true) Pipeline.resumePending(this)
+        if (driveConnected.value == true) {
+            Notifications.clearDriveReconnect(this)
+            Pipeline.resumePending(this)
+        }
     }
 
     /** Checks Drive access; with [interactive] shows Google's consent screen if needed. */
@@ -104,6 +131,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (hasPermissions()) onPermissionsReady() else permissionLauncher.launch(requiredPermissions)
         connectDrive(interactive = false)
+        handleIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(Modifier.fillMaxSize()) { Screen() }
@@ -125,6 +153,8 @@ class MainActivity : ComponentActivity() {
         val lastCapture by controller.lastCapture.collectAsStateWithLifecycle()
         val log by PinLog.lines.collectAsStateWithLifecycle()
         val stored by controller.storedFiles.collectAsStateWithLifecycle()
+        val pinRecording by controller.pinRecording.collectAsStateWithLifecycle()
+        val busy = pinRecording || recording != null
         val scope = rememberCoroutineScope()
         var cmdId by remember { mutableStateOf("") }
         var payload by remember { mutableStateOf("") }
@@ -137,6 +167,21 @@ class MainActivity : ComponentActivity() {
             Text("Drive: ${when (driveConnected.value) { true -> "connected"; false -> "not connected"; null -> "checking…" }}")
             Text("On pin: ${stored.size} file(s), ${stored.sumOf { it.bytes } / PinConfig.OPUS_BYTES_PER_SEC}s")
 
+            for (step in setupSteps.value) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(8.dp)) {
+                        Text("Setup: ${step.title}", fontWeight = FontWeight.Bold)
+                        Text(step.why, fontSize = 12.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(onClick = { setup.open(step) }) { Text("Open settings") }
+                            if (step != DeviceSetup.Step.BATTERY_EXEMPTION) {
+                                Button(onClick = { setup.confirm(step); setupSteps.value = setup.pendingSteps() }) { Text("Done") }
+                            }
+                        }
+                    }
+                }
+            }
+
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { controller.connect() }) { Text("Connect") }
                 Button(onClick = { controller.disconnect() }) { Text("Disconnect") }
@@ -147,7 +192,9 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { controller.syncAll() }) { Text("Sync all") }
                 Button(onClick = { controller.startLiveSession() }) { Text("Start live") }
                 Button(onClick = { controller.stopLiveSession() }) { Text("Stop live") }
-                Button(onClick = { scope.launch { decodeAndPlay() } }) { Text("Decode + play") }
+                Button(onClick = { scope.launch { decodeAndPlay() } }, enabled = !busy && lastCapture != null) {
+                    Text(if (busy) "Play (busy)" else "Play " + (lastCapture?.name?.take(PinConfig.FILE_NAME_PATTERN.length) ?: "-"))
+                }
                 Button(onClick = { connectDrive(interactive = true) }) { Text("Connect Drive") }
             }
 
