@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
         val recording by controller.recording.collectAsStateWithLifecycle()
         val lastCapture by controller.lastCapture.collectAsStateWithLifecycle()
         val log by PinLog.lines.collectAsStateWithLifecycle()
+        val stored by controller.storedFiles.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()
         var cmdId by remember { mutableStateOf("") }
         var payload by remember { mutableStateOf("") }
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
             Text("Link: $link   Battery: ${battery?.let { "${it.percent}%${if (it.charging) " ⚡" else ""}" } ?: "?"}")
             Text("Recording: ${recording ?: "-"}")
             Text("Last capture: ${lastCapture?.name ?: "-"}")
+            Text("On pin: ${stored.size} file(s), ${stored.sumOf { it.bytes } / PinConfig.OPUS_BYTES_PER_SEC}s")
 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { controller.connect() }) { Text("Connect") }
@@ -105,6 +107,8 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { controller.forgetPin() }) { Text("Forget") }
                 Button(onClick = { controller.readBattery() }) { Text("Battery") }
                 Button(onClick = { controller.runDiagnostics() }) { Text("Diagnose") }
+                Button(onClick = { controller.listFiles() }) { Text("List files") }
+                Button(onClick = { controller.syncAll() }) { Text("Sync all") }
                 Button(onClick = { controller.startLiveSession() }) { Text("Start live") }
                 Button(onClick = { controller.stopLiveSession() }) { Text("Stop live") }
                 Button(onClick = { scope.launch { decodeAndPlay() } }) { Text("Decode + play") }

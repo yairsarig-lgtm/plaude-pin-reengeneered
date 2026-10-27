@@ -16,17 +16,49 @@ class PlaudProtocolTest {
         assertArrayEquals(byteArrayOf(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), PlaudProtocol.startRecordPayload())
     }
 
-    @Test fun syncPayloadIsThreeU64() {
-        val p = PlaudProtocol.syncFileStartPayload(0x01020304, 0x0A0B0C0D)
-        assertEquals(24, p.size)
-        assertArrayEquals("04 03 02 01 00 00 00 00 0d 0c 0b 0a 00 00 00 00 ff ff ff 7f 00 00 00 00".hexToBytes(), p)
+    // Vectors below are real frames from the Plaud app capture (docs/PROTOCOL.md).
+
+    @Test fun syncPayloadMatchesPlaudApp() {
+        val frame = PlaudProtocol.encodeCommand(PlaudCommand.SYNC_FILE_START,
+            PlaudProtocol.syncFileStartPayload(0x6ae07c3f, 0, 0x14a0))
+        assertArrayEquals("01 1c 00 3f 7c e0 6a 00 00 00 00 a0 14 00 00".hexToBytes(), frame)
+    }
+
+    @Test fun stopSyncAndListMatchPlaudApp() {
+        assertArrayEquals("01 1e 00 3f 7c e0 6a".hexToBytes(),
+            PlaudProtocol.encodeCommand(PlaudCommand.STOP_SYNC, PlaudProtocol.stopSyncPayload(0x6ae07c3f)))
+        assertArrayEquals("01 1a 00 47 7c e0 6a 00 00 00 00 00".hexToBytes(),
+            PlaudProtocol.encodeCommand(PlaudCommand.LIST_FILES, PlaudProtocol.listFilesPayload(0x6ae07c47)))
+    }
+
+    @Test fun decodesFileList() {
+        val payload = "47 7c e0 6a 01 00 00 00 3f 7c e0 6a a0 14 00 00 01 00".hexToBytes()
+        assertEquals(listOf(PlaudProtocol.StoredFile(0x6ae07c3f, 5280, 1)), PlaudProtocol.decodeFileList(payload))
+        assertEquals(emptyList<PlaudProtocol.StoredFile>(), PlaudProtocol.decodeFileList("b4 7a e0 6a 00 00 00 00".hexToBytes()))
+    }
+
+    @Test fun decodesButtonStopWithSize() {
+        val r = PlaudProtocol.decodeStopRecord("5f 7d e0 6a 01 01 00 dc 00 00".hexToBytes())!!
+        assertEquals(PlaudProtocol.RecordStopped(0x6ae07d5f, 56320), r)
+    }
+
+    @Test fun responseIdRemapping() {
+        assertEquals(31, PlaudCommand.responseIdFor(PlaudCommand.STOP_SYNC))
+        assertEquals(26, PlaudCommand.responseIdFor(PlaudCommand.LIST_FILES))
+    }
+
+    @Test fun audioHeaderIsSessionId() {
+        val raw = "02 3f 7c e0 6a a0 00 00 00 02 b8 08".hexToBytes()
+        val n = PlaudProtocol.parse(raw) as PinNotification.Audio
+        assertEquals(0x6ae07c3fL, n.sessionId)
+        assertEquals(160L, n.position)
     }
 
     @Test fun parsesAudioPacket() {
         // 02 | header(4) | position=0x10 | len=3 | audio | trailing junk ignored
         val raw = "02 aa bb cc dd 10 00 00 00 03 de ad be ff".hexToBytes()
         val n = PlaudProtocol.parse(raw) as PinNotification.Audio
-        assertEquals(0xddccbbaaL, n.header)
+        assertEquals(0xddccbbaaL, n.sessionId)
         assertEquals(16L, n.position)
         assertArrayEquals("de ad be".hexToBytes(), n.audio)
     }

@@ -22,13 +22,22 @@
  */
 package com.yairsarig.pinlink.protocol
 
-/** Known command IDs. Everything else is probed via the raw command console. */
+/** Known command IDs. See docs/PROTOCOL.md for what each was observed to do. */
 object PlaudCommand {
+    const val GET_STATE = 3
     const val GET_BATTERY = 9
-    const val START_RECORD = 20
-    const val STOP_RECORD = 23
+    const val START_RECORD = 20   // also sent unsolicited by the pin when its button starts a recording
+    const val STOP_RECORD = 23    // also sent unsolicited on button stop, with the file size
+    const val LIST_FILES = 26
     const val SYNC_FILE_START = 28
+    const val SYNC_DONE = 29      // pin -> phone only
     const val STOP_SYNC = 30
+    const val DEVICE_NAME = 108
+
+    /** Commands whose response arrives under a different cmdId. */
+    private val responseIds = mapOf(24 to 33, 25 to 34, STOP_SYNC to 31, 112 to 113, 116 to 117)
+
+    fun responseIdFor(cmdId: Int): Int = responseIds[cmdId] ?: cmdId
 }
 
 /** A parsed notification from the pin's notify characteristic. */
@@ -36,18 +45,18 @@ sealed class PinNotification {
     abstract val raw: ByteArray
 
     /**
-     * data[0] == 2. [header] is payload bytes 0..3 (meaning unknown; Omi ignores it — logged so we
-     * can figure it out). [position] is a uint32 byte offset into the recording.
+     * data[0] == 2. [sessionId] is the recording this audio belongs to (Omi left it unexplained).
+     * [position] is a uint32 byte offset into the recording.
      */
     data class Audio(
         override val raw: ByteArray,
-        val header: Long,
+        val sessionId: Long,
         val position: Long,
         val audio: ByteArray,
     ) : PinNotification()
 
     /** Audio packet with position 0xFFFFFFFF: the pin has nothing more to send. */
-    data class AudioEnd(override val raw: ByteArray, val header: Long) : PinNotification()
+    data class AudioEnd(override val raw: ByteArray, val sessionId: Long) : PinNotification()
 
     data class CommandResponse(
         override val raw: ByteArray,
@@ -73,12 +82,12 @@ object PlaudProtocol {
         if (data[0].toInt() and 0xFF == FRAME_AUDIO) {
             val p = data.copyOfRange(1, data.size)
             if (p.size < AUDIO_HEADER_LEN) return PinNotification.Unknown(data)
-            val header = Le.u32(p, 0)
+            val sessionId = Le.u32(p, 0)
             val position = Le.u32(p, 4)
-            if (position == END_MARKER) return PinNotification.AudioEnd(data, header)
+            if (position == END_MARKER) return PinNotification.AudioEnd(data, sessionId)
             val len = p[8].toInt() and 0xFF
             if (AUDIO_HEADER_LEN + len > p.size) return PinNotification.Unknown(data)
-            return PinNotification.Audio(data, header, position, p.copyOfRange(AUDIO_HEADER_LEN, AUDIO_HEADER_LEN + len))
+            return PinNotification.Audio(data, sessionId, position, p.copyOfRange(AUDIO_HEADER_LEN, AUDIO_HEADER_LEN + len))
         }
         if (data.size >= 3) {
             val cmdId = (data[1].toInt() and 0xFF) or ((data[2].toInt() and 0xFF) shl 8)
@@ -93,10 +102,16 @@ object PlaudProtocol {
 
     fun stopRecordPayload(sessionId: Long): ByteArray = Le.bytes32(sessionId) + Le.bytes32(0)
 
-    fun syncFileStartPayload(sessionId: Long, start: Long, end: Long = 0x7FFFFFFFL): ByteArray =
-        Le.bytes64(sessionId) + Le.bytes64(start) + Le.bytes64(end)
+    /**
+     * Three u32s, as the official app sends them (Omi uses three u64s, which this firmware's app
+     * never does). [end] = 0 follows a recording that is still running.
+     */
+    fun syncFileStartPayload(sessionId: Long, start: Long, end: Long): ByteArray =
+        Le.bytes32(sessionId) + Le.bytes32(start) + Le.bytes32(end)
 
-    val STOP_SYNC_PAYLOAD = byteArrayOf(0x01)
+    fun stopSyncPayload(sessionId: Long): ByteArray = Le.bytes32(sessionId)
+
+    fun listFilesPayload(nowEpochSeconds: Long): ByteArray = Le.bytes32(nowEpochSeconds) + ByteArray(5)
 
     // --- Response decoders ---
 
@@ -109,6 +124,30 @@ object PlaudProtocol {
 
     fun decodeStartRecord(payload: ByteArray): RecordStarted? =
         if (payload.size >= 10) RecordStarted(Le.u32(payload, 0), Le.u32(payload, 4)) else null
+
+    /** A stored recording. [sessionId] is also its start time in Unix seconds. */
+    data class StoredFile(val sessionId: Long, val bytes: Long, val flags: Int)
+
+    fun decodeFileList(payload: ByteArray): List<StoredFile>? {
+        if (payload.size < 8) return null
+        val count = Le.u32(payload, 4).toInt()
+        val entries = (0 until count).map { 8 + it * FILE_ENTRY_BYTES }.takeWhile { it + FILE_ENTRY_BYTES <= payload.size }
+        return entries.map { off ->
+            StoredFile(Le.u32(payload, off), Le.u32(payload, off + 4),
+                (payload[off + 8].toInt() and 0xFF) or ((payload[off + 9].toInt() and 0xFF) shl 8))
+        }
+    }
+
+    private const val FILE_ENTRY_BYTES = 10
+
+    data class RecordStopped(val sessionId: Long, val bytes: Long)
+
+    /** cmd 23 payload: sessionId u32, two flag bytes, file size u32. */
+    fun decodeStopRecord(payload: ByteArray): RecordStopped? =
+        if (payload.size >= 10) RecordStopped(Le.u32(payload, 0), Le.u32(payload, 6)) else null
+
+    /** cmd 29 payload: sessionId u32, ff ff. */
+    fun decodeSyncDone(payload: ByteArray): Long? = if (payload.size >= 4) Le.u32(payload, 0) else null
 }
 
 /** Little-endian helpers. */

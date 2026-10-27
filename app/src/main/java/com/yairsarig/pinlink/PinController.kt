@@ -20,6 +20,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.text.SimpleDateFormat
@@ -29,8 +31,9 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Phase 1 brain: owns the link, routes notifications, runs the live-session recipe, records audio.
+ * Phase 1 brain: owns the link, routes notifications, follows/syncs recordings, records audio.
  * Process-wide singleton (see [PinLinkApp]); the foreground service just keeps the process alive.
+ * Protocol details: docs/PROTOCOL.md.
  */
 class PinController(private val context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -45,13 +48,19 @@ class PinController(private val context: Context) {
     val recording: StateFlow<String?> = _recording
     private val _lastCapture = MutableStateFlow<File?>(null)
     val lastCapture: StateFlow<File?> = _lastCapture
+    private val _storedFiles = MutableStateFlow<List<PlaudProtocol.StoredFile>>(emptyList())
+    val storedFiles: StateFlow<List<PlaudProtocol.StoredFile>> = _storedFiles
 
     private val prefs = context.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
     private val recordingsDir = File(context.getExternalFilesDir(null), PinConfig.DIR_RECORDINGS).apply { mkdirs() }
     private val pendingResponses = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
-    private val stampFmt = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US)
+    private val stampFmt = SimpleDateFormat(PinConfig.FILE_NAME_PATTERN, Locale.US)
 
+    /** One transfer (live follow or file sync) at a time. */
+    private val transferLock = Mutex()
     @Volatile private var recorder: OpusPacketRecorder? = null
+    @Volatile private var recorderSession: Long? = null
+    @Volatile private var transferDone: CompletableDeferred<Unit>? = null
     @Volatile private var liveSessionId: Long? = null
     @Volatile private var userWantsLink = false
     private var reconnectJob: Job? = null
@@ -83,12 +92,14 @@ class PinController(private val context: Context) {
             ?: scanner.find() ?: error("pin not found")
         client.connect(device)
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
-        runDiagnostics().join()
+        readBattery().join()
+        listFiles().join()
     }
 
     private fun onUnexpectedDisconnect() {
         PinLog.w("Link dropped")
         liveSessionId = null
+        transferDone?.cancel()
         closeRecorder()
         if (userWantsLink) scheduleReconnect()
     }
@@ -113,7 +124,7 @@ class PinController(private val context: Context) {
 
     // ---------- Commands ----------
 
-    /** Sends a command and waits for the response with the same cmdId (null on timeout). */
+    /** Sends a command and waits for its response (null on timeout). */
     suspend fun command(
         cmdId: Int,
         payload: ByteArray = ByteArray(0),
@@ -121,13 +132,14 @@ class PinController(private val context: Context) {
         mode: WriteMode = WriteMode.AUTO,
     ): ByteArray? {
         val frame = PlaudProtocol.encodeCommand(cmdId, payload)
-        val waiter = if (awaitResponse) CompletableDeferred<ByteArray>().also { pendingResponses[cmdId] = it } else null
+        val respId = PlaudCommand.responseIdFor(cmdId)
+        val waiter = if (awaitResponse) CompletableDeferred<ByteArray>().also { pendingResponses[respId] = it } else null
         PinLog.i("TX cmd=$cmdId mode=$mode ${frame.toHex()}")
         client.write(frame, mode)
         if (waiter == null) return null
         return withTimeoutOrNull(PinConfig.COMMAND_RESPONSE_TIMEOUT_MS) { waiter.await() }
             .also { if (it == null) PinLog.w("cmd=$cmdId: no response") }
-            .also { pendingResponses.remove(cmdId, waiter) }
+            .also { pendingResponses.remove(respId, waiter) }
     }
 
     fun readBattery() = scope.launch {
@@ -136,9 +148,24 @@ class PinController(private val context: Context) {
         PinLog.i("Battery: ${_battery.value}")
     }
 
+    fun listFiles() = scope.launch {
+        val r = runCatching { command(PlaudCommand.LIST_FILES, PlaudProtocol.listFilesPayload(nowEpoch())) }.getOrNull()
+        val files = r?.let(PlaudProtocol::decodeFileList) ?: return@launch PinLog.w("List files failed")
+        _storedFiles.value = files
+        PinLog.i("Pin has ${files.size} stored file(s)" +
+            files.joinToString("") { "\n  ${stamp(it.sessionId)} sid=${it.sessionId} ${it.bytes} B (~${it.bytes / PinConfig.OPUS_BYTES_PER_SEC}s) flags=${it.flags}" })
+    }
+
+    /** Pulls every file the pin lists. */
+    fun syncAll() = scope.launch {
+        listFiles().join()
+        for (f in _storedFiles.value) syncFile(f.sessionId, f.bytes)
+        listFiles().join()
+    }
+
     /**
-     * Sanity checks after connect: read the standard battery char and b001, then try cmd 9 with
-     * both write types (2bb1 advertises write and write-without-response).
+     * Sanity checks: read the standard battery char and b001, then try cmd 9 with both write
+     * types (2bb1 advertises write and write-without-response).
      */
     fun runDiagnostics() = scope.launch {
         PinLog.i("--- diagnostics ---")
@@ -166,7 +193,45 @@ class PinController(private val context: Context) {
             .onFailure { PinLog.e("cmd=$cmdId failed", it) }
     }
 
-    // ---------- Live session (Omi recipe) ----------
+    // ---------- Transfers ----------
+
+    /** Pulls bytes [0, size) of a stored recording into `<start time>_sync.opuspk`. */
+    suspend fun syncFile(sessionId: Long, size: Long): Boolean = transferLock.withLock {
+        PinLog.i("Sync sid=$sessionId (${stamp(sessionId)}) $size B")
+        val rec = openRecorder(sessionId, "sync")
+        val done = CompletableDeferred<Unit>().also { transferDone = it }
+        val ack = runCatching {
+            command(PlaudCommand.SYNC_FILE_START, PlaudProtocol.syncFileStartPayload(sessionId, 0, size))
+        }.getOrNull()
+        if (ack == null || ack.getOrNull(4)?.toInt() != 0) {
+            PinLog.e("Sync sid=$sessionId refused: ${ack?.toHex()}")
+            closeRecorder()
+            return false
+        }
+        val timeout = PinConfig.SYNC_TIMEOUT_BASE_MS + size * 1000 / PinConfig.SYNC_MIN_BYTES_PER_SEC
+        val finished = withTimeoutOrNull(timeout) { runCatching { done.await() }.isSuccess } == true
+        runCatching { command(PlaudCommand.STOP_SYNC, PlaudProtocol.stopSyncPayload(sessionId)) }
+        closeRecorder()
+        val ok = finished && rec.bytes == size && rec.gaps == 0
+        PinLog.i("Sync sid=$sessionId ${if (ok) "OK" else "INCOMPLETE"}: got ${rec.bytes}/$size B, gaps=${rec.gaps}, finished=$finished")
+        ok
+    }
+
+    /** Follows a recording that is still running (end = 0), until the pin says it's done. */
+    private fun followLive(sessionId: Long) = scope.launch {
+        transferLock.withLock {
+            openRecorder(sessionId, "live")
+            transferDone = CompletableDeferred()
+            val ack = runCatching {
+                command(PlaudCommand.SYNC_FILE_START, PlaudProtocol.syncFileStartPayload(sessionId, 0, 0))
+            }.getOrNull()
+            PinLog.i("Following sid=$sessionId live: ack=${ack?.toHex()}")
+            if (ack == null) closeRecorder()
+            // Recorder is closed by cmd 29 / end marker; the stop event then triggers a full sync.
+        }
+    }
+
+    // ---------- Phone-initiated live session (Omi recipe, cmd 28 corrected) ----------
 
     fun startLiveSession() = scope.launch {
         repeat(PinConfig.SESSION_SETUP_ATTEMPTS) { attempt ->
@@ -176,14 +241,11 @@ class PinController(private val context: Context) {
                 delay(PinConfig.STOP_TO_START_DELAY_MS)
                 val started = command(PlaudCommand.START_RECORD, PlaudProtocol.startRecordPayload())
                     ?.let(PlaudProtocol::decodeStartRecord) ?: return@repeat
-                PinLog.i("Recording started on pin: $started")
+                PinLog.i("Recording started on pin: sid=${started.sessionId} (${stamp(started.sessionId)})")
                 liveSessionId = started.sessionId
-                openRecorder("live")
                 delay(PinConfig.START_TO_SYNC_DELAY_MS)
-                if (command(PlaudCommand.SYNC_FILE_START, PlaudProtocol.syncFileStartPayload(started.sessionId, started.startTime)) != null) {
-                    PinLog.i("Live session streaming (session=${started.sessionId})")
-                    return@launch
-                }
+                followLive(started.sessionId).join()
+                if (recorder != null) return@launch
             } catch (t: Throwable) {
                 PinLog.e("Live session attempt ${attempt + 1} failed", t)
             }
@@ -192,13 +254,21 @@ class PinController(private val context: Context) {
     }
 
     fun stopLiveSession() = scope.launch {
-        val id = liveSessionId
-        runCatching {
-            command(PlaudCommand.STOP_SYNC, PlaudProtocol.STOP_SYNC_PAYLOAD, awaitResponse = false)
-            if (id != null) command(PlaudCommand.STOP_RECORD, PlaudProtocol.stopRecordPayload(id))
-        }.onFailure { PinLog.e("Stop failed", it) }
+        val id = liveSessionId ?: return@launch PinLog.w("No live session")
         liveSessionId = null
-        closeRecorder()
+        val stopped = runCatching { command(PlaudCommand.STOP_RECORD, PlaudProtocol.stopRecordPayload(id)) }
+            .onFailure { PinLog.e("Stop failed", it) }.getOrNull()?.let(PlaudProtocol::decodeStopRecord)
+        PinLog.i("Recording stopped: $stopped")
+        stopped?.let(::onRecordingStopped)
+    }
+
+    private fun onRecordingStopped(s: PlaudProtocol.RecordStopped) {
+        if (!PinConfig.SYNC_ON_STOP || s.bytes == 0L) return
+        scope.launch {
+            // Let the live follow finish (cmd 29) before pulling the complete file.
+            transferDone?.let { withTimeoutOrNull(PinConfig.COMMAND_RESPONSE_TIMEOUT_MS) { runCatching { it.await() } } }
+            syncFile(s.sessionId, s.bytes)
+        }
     }
 
     // ---------- Notifications ----------
@@ -210,33 +280,63 @@ class PinController(private val context: Context) {
         }
         when (val n = PlaudProtocol.parse(data)) {
             is PinNotification.Audio -> {
-                // Pin-initiated audio arrives with no session open: capture it anyway (open question #1).
-                val rec = recorder ?: openRecorder("unsolicited").also { PinLog.w("Audio arrived with no live session!") }
+                val rec = recorder ?: openRecorder(n.sessionId, "unsolicited").also { PinLog.w("Audio arrived with no transfer open!") }
+                if (recorderSession != n.sessionId) PinLog.w("Audio for sid=${n.sessionId} while recording sid=$recorderSession")
                 rec.append(n.position, n.audio)
                 val toUi = rec.packets <= 3 || ++audioPacketsSinceUiLog % 200 == 0
-                PinLog.rx("[audio hdr=0x%08x pos=%d len=%d] %s".format(n.header, n.position, n.audio.size, data.toHex()), toUi)
+                PinLog.rx("[audio sid=${n.sessionId} pos=${n.position} len=${n.audio.size}] ${data.toHex()}", toUi)
             }
             is PinNotification.AudioEnd -> {
-                PinLog.rx("[audio END hdr=0x%08x] %s".format(n.header, data.toHex()), true)
-                closeRecorder()
+                PinLog.rx("[audio END sid=${n.sessionId}] ${data.toHex()}", true)
+                finishTransfer()
             }
             is PinNotification.CommandResponse -> {
                 PinLog.rx("[resp cmd=${n.cmdId}] ${data.toHex()}", true)
-                pendingResponses.remove(n.cmdId)?.complete(n.payload)
-                    ?: PinLog.w("Unsolicited response for cmd=${n.cmdId}")
+                val waiter = pendingResponses.remove(n.cmdId)
+                if (waiter != null) waiter.complete(n.payload) else onEvent(n.cmdId, n.payload)
             }
             is PinNotification.Unknown -> PinLog.rx("[unknown] ${data.toHex()}", true)
         }
     }
 
+    /** Messages the pin sends on its own. */
+    private fun onEvent(cmdId: Int, payload: ByteArray) {
+        when (cmdId) {
+            PlaudCommand.START_RECORD -> PlaudProtocol.decodeStartRecord(payload)?.let {
+                PinLog.i("Pin button: recording started sid=${it.sessionId} (${stamp(it.sessionId)})")
+                if (PinConfig.FOLLOW_BUTTON_RECORDINGS_LIVE) followLive(it.sessionId)
+            }
+            PlaudCommand.STOP_RECORD -> PlaudProtocol.decodeStopRecord(payload)?.let {
+                PinLog.i("Pin button: recording stopped sid=${it.sessionId}, ${it.bytes} B (~${it.bytes / PinConfig.OPUS_BYTES_PER_SEC}s)")
+                onRecordingStopped(it)
+            }
+            PlaudCommand.SYNC_DONE -> {
+                PinLog.i("Pin: transfer done sid=${PlaudProtocol.decodeSyncDone(payload)}")
+                finishTransfer()
+            }
+            else -> PinLog.w("Unsolicited cmd=$cmdId [${payload.toHex()}]")
+        }
+    }
+
+    private fun finishTransfer() {
+        transferDone?.complete(Unit)
+        // A sync closes its own recorder after cmd 30; a live follow has nobody waiting, so close here.
+        if (_recording.value?.contains("_live") == true) closeRecorder()
+    }
+
     // ---------- Recording files ----------
 
+    private fun nowEpoch() = System.currentTimeMillis() / 1000
+    private fun stamp(sessionId: Long): String = stampFmt.format(Date(sessionId * 1000))
+
     @Synchronized
-    private fun openRecorder(kind: String): OpusPacketRecorder {
+    private fun openRecorder(sessionId: Long, kind: String): OpusPacketRecorder {
         recorder?.close()
-        val f = File(recordingsDir, "${stampFmt.format(Date())}_$kind${PinConfig.RAW_PACKET_EXT}")
+        val f = File(recordingsDir, "${stamp(sessionId)}_$kind${PinConfig.RAW_PACKET_EXT}")
+        f.delete() // a re-sync replaces the earlier copy instead of appending to it
         return OpusPacketRecorder(f).also {
             recorder = it
+            recorderSession = sessionId
             audioPacketsSinceUiLog = 0
             _recording.value = f.name
             PinLog.i("Recording to ${f.absolutePath}")
@@ -247,6 +347,7 @@ class PinController(private val context: Context) {
     private fun closeRecorder() {
         val r = recorder ?: return
         recorder = null
+        recorderSession = null
         r.close()
         _recording.value = null
         if (r.packets > 0) _lastCapture.value = r.file else r.file.delete()

@@ -42,6 +42,16 @@ object PinConfig {
     const val GATT_OP_TIMEOUT_MS = 10_000L
     const val COMMAND_RESPONSE_TIMEOUT_MS = 10_000L
 
+    // --- Sync ---
+    /** Follow a pin-button recording live (cmd 28 with end=0), as the Plaud app does. */
+    const val FOLLOW_BUTTON_RECORDINGS_LIVE = true
+    /** Pull the complete file when the pin reports a recording stopped. */
+    const val SYNC_ON_STOP = true
+    /** Sync timeout = base + size / expected throughput. */
+    const val SYNC_TIMEOUT_BASE_MS = 15_000L
+    const val SYNC_MIN_BYTES_PER_SEC = 2_000L
+    const val FILE_NAME_PATTERN = "yyyy-MM-dd_HH-mm-ss"
+
     // --- Live session recipe (Omi plaud_connection.dart) ---
     const val STOP_TO_START_DELAY_MS = 500L
     const val START_TO_SYNC_DELAY_MS = 1_000L
@@ -54,9 +64,11 @@ object PinConfig {
     // --- Audio ---
     const val OPUS_SAMPLE_RATE = 16_000
     const val OPUS_CHANNELS = 1
-    /** Omi slices the stream into fixed 80-byte Opus frames (20 ms @ 32 kbps CBR). Unverified. */
+    /** Fixed 80-byte Opus frames, TOC 0xb8 (CELT WB 20 ms) — confirmed from capture. */
     const val OPUS_FIXED_FRAME_BYTES = 80
     const val OPUS_FRAME_DURATION_US = 20_000L
+    /** CBR 32 kbps: 80-byte frames every 20 ms (confirmed from capture, see docs/PROTOCOL.md). */
+    const val OPUS_BYTES_PER_SEC = 4_000L
 
     // --- Storage (under getExternalFilesDir so `adb pull` works) ---
     const val DIR_RECORDINGS = "recordings"
