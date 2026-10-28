@@ -83,17 +83,30 @@ object IdeasModel {
         return if (i < 0) null else i + headerOffset
     }
 
-    /** "14:37" today, "Yesterday 09:12", "Mon 09:12" this week, "27 Oct" older; raw text if unparseable. */
+    /** "Today 14:37", "Yesterday", "27 Oct" earlier this year, "27 Oct 2025" before; raw text if unparseable. */
     fun timeLabel(recorded: String, now: ZonedDateTime = ZonedDateTime.now()): String {
         val t = parseTime(recorded)?.let { ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(it), now.zone) } ?: return recorded
         val days = java.time.temporal.ChronoUnit.DAYS.between(t.toLocalDate(), now.toLocalDate())
-        val hm = DateTimeFormatter.ofPattern("HH:mm", Locale.US).format(t)
         return when {
-            days == 0L -> hm
-            days == 1L -> "Yesterday $hm"
-            days in 2..6 -> DateTimeFormatter.ofPattern("EEE", Locale.US).format(t) + " $hm"
+            days == 0L -> "Today " + DateTimeFormatter.ofPattern("HH:mm", Locale.US).format(t)
+            days == 1L -> "Yesterday"
             t.year == now.year -> DateTimeFormatter.ofPattern("d MMM", Locale.US).format(t)
             else -> DateTimeFormatter.ofPattern("d MMM yyyy", Locale.US).format(t)
+        }
+    }
+
+    /** Ideas recorded on [now]'s calendar day. */
+    fun newToday(ideas: List<Idea>, now: ZonedDateTime = ZonedDateTime.now()): Int = ideas.count { idea ->
+        parseTime(idea.recorded, now.zone)?.let { java.time.Instant.ofEpochMilli(it).atZone(now.zone).toLocalDate() } == now.toLocalDate()
+    }
+
+    /** "Tuesday, 27 October · 3 new ideas today"; just the date when nothing is new. */
+    fun dateLine(newToday: Int, now: ZonedDateTime = ZonedDateTime.now()): String {
+        val date = DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.US).format(now)
+        return when (newToday) {
+            0 -> date
+            1 -> "$date · 1 new idea today"
+            else -> "$date · $newToday new ideas today"
         }
     }
 

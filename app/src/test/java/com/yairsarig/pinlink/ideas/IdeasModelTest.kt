@@ -52,11 +52,25 @@ class IdeasModelTest {
     @Test fun timeLabels() {
         val zone = ZoneId.of("Asia/Jerusalem")
         val now = ZonedDateTime.of(2026, 10, 27, 16, 0, 0, 0, zone)
-        assertEquals("14:37", IdeasModel.timeLabel("2026-10-27T14:37:42+02:00", now))
-        assertEquals("Yesterday 09:00", IdeasModel.timeLabel("2026-10-26T09:00:00+02:00", now))
-        assertEquals("Fri 09:00", IdeasModel.timeLabel("2026-10-23T09:00:00+03:00", now))
+        assertEquals("Today 14:37", IdeasModel.timeLabel("2026-10-27T14:37:42+02:00", now))
+        assertEquals("Yesterday", IdeasModel.timeLabel("2026-10-26T09:00:00+02:00", now))
+        assertEquals("23 Oct", IdeasModel.timeLabel("2026-10-23T09:00:00+03:00", now))
         assertEquals("1 Oct", IdeasModel.timeLabel("2026-10-01", now))
+        assertEquals("3 Dec 2025", IdeasModel.timeLabel("2025-12-03", now))
         assertEquals("sometime", IdeasModel.timeLabel("sometime", now))
+    }
+
+    @Test fun countsTodaysIdeasAndBuildsDateLine() {
+        val zone = ZoneId.of("Asia/Jerusalem")
+        val now = ZonedDateTime.of(2026, 10, 27, 16, 0, 0, 0, zone)
+        fun idea(t: String) = Idea(t, "x", "", "", "", "")
+        // 23:30 UTC on the 26th is 01:30 on the 27th in Jerusalem, so it counts as today.
+        val ideas = listOf(idea("2026-10-27T13:56:00+02:00"), idea("2026-10-26T23:30:00Z"),
+            idea("2026-10-26T21:00:00+02:00"), idea("garbage"))
+        assertEquals(2, IdeasModel.newToday(ideas, now))
+        assertEquals("Tuesday, 27 October · 2 new ideas today", IdeasModel.dateLine(2, now))
+        assertEquals("Tuesday, 27 October · 1 new idea today", IdeasModel.dateLine(1, now))
+        assertEquals("Tuesday, 27 October", IdeasModel.dateLine(0, now))
     }
 
     @Test fun parsesLogAndKeepsNewestTen() {

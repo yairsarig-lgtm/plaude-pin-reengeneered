@@ -1,43 +1,68 @@
 package com.yairsarig.pinlink.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yairsarig.pinlink.R
 
-/** Pocket Ideas look: white, black, quiet grey labels, 14 dp corners, ideas set in a serif. */
+/** Pocket Ideas look: warm off-white, soft cards, thin outlines, ideas set in Gelasio (bundled, OFL). */
 object Pocket {
-    val background = Color.White
-    val ink = Color.Black
-    val muted = Color(0xFF8A8A8A)
-    val card = Color(0xFFF3F3F3)
+    val background = Color(0xFFFAFAF7)
+    val ink = Color(0xFF141414)
+    val muted = Color(0xFF8C8B86)
+    val card = Color(0xFFF2F1EC)
     val pill = Color.White
-    val frame = Color(0x1F000000) // rgba(0,0,0,0.12)
-    val green = Color(0xFF2EAD5B)
-    val amber = Color(0xFFF2A007)
+    val frame = Color(0x1F000000) // rgba(0,0,0,0.12): light outlines (Recent actions card, settings pills)
+    val outline = Color(0x52000000) // rgba(0,0,0,0.32): header buttons and the Filter pill
+    val divider = Color(0x14000000)
+    val green = Color(0xFF7A9A7E) // sage: connected and synced
+    val amber = Color(0xFFE0A23A)
     val grey = Color(0xFFB8B8B8)
     val danger = Color(0xFFC0392B)
+    val reviewCard = Color(0xFFFBF3EA)
+    val reviewPill = Color(0xFFF8E3C4)
+    val reviewText = Color(0xFF8A5A14)
 
-    val corner = RoundedCornerShape(14.dp)
+    val corner = RoundedCornerShape(16.dp)
     val pillShape = RoundedCornerShape(50)
+    val cardElevation = 1.5.dp
+    val shadow = Color(0x14000000)
+    val iconStroke = 1.5f
+    val gutter = 20.dp
 
-    /** Georgia isn't on Android; the system serif (Noto Serif) is the closest built-in face. */
-    val ideaFont = FontFamily.Serif
+    val serif = FontFamily(
+        Font(R.font.gelasio, FontWeight.Normal),
+        Font(R.font.gelasio_italic, FontWeight.Normal, FontStyle.Italic),
+    )
 
-    val ideaText = TextStyle(fontFamily = ideaFont, fontSize = 18.sp, lineHeight = 25.sp, color = ink)
+    val wordmark = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 34.sp, fontWeight = FontWeight.Bold,
+        letterSpacing = (-1.4).sp, color = ink)
+    val dateLine = TextStyle(fontFamily = serif, fontStyle = FontStyle.Italic, fontSize = 17.sp, color = muted)
+    val ideaText = TextStyle(fontFamily = serif, fontSize = 20.sp, lineHeight = 27.sp, color = ink)
     val body = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 15.sp, lineHeight = 21.sp, color = ink)
-    val small = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, color = muted)
-    val label = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-        letterSpacing = 1.2.sp, color = muted)
+    val tag = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, color = ink)
+    val small = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 13.sp, color = muted)
+    val label = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        letterSpacing = 2.sp, color = muted)
 }
+
+/** Pocket card surface: [color] fill, 16 dp corners, a barely-there shadow. */
+fun Modifier.pocketCard(color: Color = Pocket.card): Modifier =
+    shadow(Pocket.cardElevation, Pocket.corner, ambientColor = Pocket.shadow, spotColor = Pocket.shadow)
+        .background(color, Pocket.corner)
 
 @Composable
 fun PocketTheme(content: @Composable () -> Unit) {
