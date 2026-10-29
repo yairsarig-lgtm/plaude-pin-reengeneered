@@ -19,12 +19,15 @@ import com.yairsarig.pinlink.protocol.PlaudProtocol
 import com.yairsarig.pinlink.protocol.toHex
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -59,6 +62,9 @@ class PinController(private val context: Context) {
     val pinRecording: StateFlow<Boolean> = _pinRecording
     private val _storedFiles = MutableStateFlow<List<PlaudProtocol.StoredFile>>(emptyList())
     val storedFiles: StateFlow<List<PlaudProtocol.StoredFile>> = _storedFiles
+    private val _bluetoothOn = MutableStateFlow(
+        context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.isEnabled == true)
+    val bluetoothOn: StateFlow<Boolean> = _bluetoothOn
 
     private val prefs = context.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
     private val recordingsDir = Pipeline.recordingsDir(context)
@@ -85,10 +91,12 @@ class PinController(private val context: Context) {
         override fun onReceive(c: Context, intent: Intent) {
             when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
                 BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                    _bluetoothOn.value = false
                     reconnectJob?.cancel()
                     if (client.state.value != LinkState.DISCONNECTED) handleDeadLink("Bluetooth turned off", reconnect = false)
                 }
                 BluetoothAdapter.STATE_ON -> {
+                    _bluetoothOn.value = true
                     PinLog.i("Bluetooth on")
                     if (userWantsLink && client.state.value == LinkState.DISCONNECTED) connect()
                 }
@@ -136,7 +144,18 @@ class PinController(private val context: Context) {
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
         startHealthCheck()
         readBattery().join()
-        if (PinConfig.SYNC_ON_CONNECT) scope.launch { listFiles().join(); syncPending() }
+        if (PinConfig.SYNC_ON_CONNECT) syncAll()
+    }
+
+    /**
+     * For Send now: true once the link is READY, connecting first if needed. Gives up after
+     * [PinConfig.SEND_CONNECT_TIMEOUT_MS] (out of range); background reconnects carry on.
+     */
+    suspend fun ensureConnected(): Boolean {
+        if (client.state.value == LinkState.READY) return true
+        if (!_bluetoothOn.value) return false
+        if (client.state.value == LinkState.DISCONNECTED) connect()
+        return withTimeoutOrNull(PinConfig.SEND_CONNECT_TIMEOUT_MS) { client.state.first { it == LinkState.READY } } != null
     }
 
     /** Pings the pin when it has been quiet; a link that can't answer gets torn down and rebuilt. */
@@ -233,11 +252,17 @@ class PinController(private val context: Context) {
         if (client.state.value == LinkState.READY) syncAll() else connect()
     }
 
-    /** Pulls every file the pin lists. */
-    fun syncAll() = scope.launch {
+    private var syncJob: Deferred<Int>? = null
+
+    /**
+     * Pulls every file the pin lists; the result is how many came off complete. A call while a
+     * sync is running joins it, so a connect's own sync and Send now never pull twice.
+     */
+    @Synchronized
+    fun syncAll(): Deferred<Int> = syncJob?.takeIf { it.isActive } ?: scope.async {
         listFiles().join()
         syncPending()
-    }
+    }.also { syncJob = it }
 
     /**
      * Sanity checks: read the standard battery char and b001, then try cmd 9 with both write
@@ -309,12 +334,14 @@ class PinController(private val context: Context) {
     }
 
     /** Pulls everything the pin still lists (it stops listing a file once it has been synced). */
-    private suspend fun syncPending() {
+    private suspend fun syncPending(): Int {
+        var pulled = 0
         for (f in _storedFiles.value) {
-            if (client.state.value != LinkState.READY) return
-            syncFile(f.sessionId, f.bytes)
+            if (client.state.value != LinkState.READY) return pulled
+            if (syncFile(f.sessionId, f.bytes)) pulled++
         }
         if (_storedFiles.value.isNotEmpty()) listFiles().join()
+        return pulled
     }
 
     /** Follows a recording that is still running (end = 0), until the pin says it's done. */

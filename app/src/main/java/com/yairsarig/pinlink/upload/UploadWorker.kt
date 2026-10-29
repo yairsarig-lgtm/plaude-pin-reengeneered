@@ -7,6 +7,7 @@ import com.yairsarig.pinlink.Notifications
 import com.yairsarig.pinlink.PinConfig
 import com.yairsarig.pinlink.PinLog
 import com.yairsarig.pinlink.Pipeline
+import com.yairsarig.pinlink.claude.ClaudeTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -49,6 +50,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 is DriveSession.Result.Ok -> {
                     val (id, existed) = outcome.value
                     marker.writeText(id)
+                    ClaudeTrigger.onUploaded(applicationContext)
                     DriveAuth.setConnected(true)
                     Notifications.clearDriveReconnect(applicationContext)
                     PinLog.i(if (existed) "Upload ${transcript.name}: already in ${PinConfig.DRIVE_FOLDER} ($id)" else "Uploaded ${transcript.name} -> ${PinConfig.DRIVE_FOLDER} ($id)")

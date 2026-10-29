@@ -126,6 +126,35 @@ object PinConfig {
     const val UNDO_WINDOW_MS = 5_000L
     const val SHEET_URL_PREFIX = "https://docs.google.com/spreadsheets/d/"
 
+    // --- Claude routine (https://platform.claude.com/docs/en/api/claude-code/routines-fire) ---
+    /** URL and token are typed in by the owner and kept in EncryptedSharedPreferences; never logged. */
+    const val SECURE_PREFS_NAME = "pinlink_secure"
+    const val PREF_ROUTINE_URL = "routine_url"
+    const val PREF_ROUTINE_TOKEN = "routine_token"
+    const val PREF_CLAUDE_AUTO = "claude_auto"
+    const val PREF_UPLOADS_SINCE_FIRE = "uploads_since_fire"
+    const val PREF_FIRE_TIMES = "fire_times"
+    const val PREF_LAST_FIRE_AT = "last_fire_at"
+    const val PREF_CLAUDE_REJECTED = "claude_rejected"
+    const val ROUTINE_API_VERSION = "2026-10-21"
+    const val ROUTINE_URL_PREFIX = "https://"
+    /** Background uploads wait this long for more memos, so a burst becomes one fire. */
+    const val FIRE_DEBOUNCE_SECONDS = 60L
+    /** Our own cap, under the routine's 30/hour. Past it, the hourly task picks memos up. */
+    const val MAX_FIRES_PER_HOUR = 20
+    const val FIRE_WINDOW_MS = 3_600_000L
+    const val FIRE_MAX_ATTEMPTS = 3
+    /** After a fire, the dot stays blue this long, then the ideas list refreshes. */
+    const val CLAUDE_PROCESSING_MS = 120_000L
+    const val FIRE_TEXT_TEMPLATE = "Triggered from Pocket Ideas: %d new memo(s) uploaded."
+    const val FIRE_TEST_TEXT = "Test from Pocket Ideas settings: no new memos, nothing to do."
+
+    // --- Send now (tap the pin button) ---
+    const val SEND_CONNECT_TIMEOUT_MS = 30_000L
+    /** Transcribing + uploading; past this the snackbar says it carries on in the background. */
+    const val SEND_PIPELINE_TIMEOUT_MS = 360_000L
+    const val SEND_POLL_MS = 1_000L
+
     // --- Housekeeping ---
     /** Local copies are deleted this long after their transcript reached Drive. */
     const val RETENTION_DAYS = 7L

@@ -20,7 +20,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,9 +34,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yairsarig.pinlink.PinConfig
 import com.yairsarig.pinlink.Pipeline
+import com.yairsarig.pinlink.claude.ClaudeTrigger
 import com.yairsarig.pinlink.ble.LinkState
 import com.yairsarig.pinlink.ble.WriteMode
 import com.yairsarig.pinlink.housekeeping.DeviceSetup
@@ -52,6 +60,11 @@ class SettingsUi(
     val pipeline: Pipeline.Status,
     val recordings: List<File>,
     val log: List<String>,
+    val claude: ClaudeTrigger.State,
+    val routineUrl: String,
+    val hasToken: Boolean,
+    /** Outcome of the last Test, in plain words (null = not run, "Testing…" while running). */
+    val testResult: String?,
 )
 
 class SettingsActions(
@@ -68,6 +81,10 @@ class SettingsActions(
     val startLive: () -> Unit,
     val stopLive: () -> Unit,
     val sendRaw: (cmd: String, payloadHex: String, WriteMode) -> Unit,
+    /** [token] null keeps the stored token. */
+    val saveRoutine: (url: String, token: String?) -> Unit,
+    val testRoutine: () -> Unit,
+    val setAutoSend: (Boolean) -> Unit,
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -102,6 +119,19 @@ fun SettingsScreen(ui: SettingsUi, act: SettingsActions) {
                     Pill("Reconnect Drive", act.reconnectDrive)
                     if (ui.sheetId != null) Pill("Open sheet", act.openSheet)
                 }
+            }
+
+            ClaudeCard(ui, act)
+
+            Section("Status colors") {
+                for (st in PinStatus.entries) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(10.dp).background(st.color, CircleShape))
+                        Spacer(Modifier.width(12.dp))
+                        Line(st.legend, small = true)
+                    }
+                }
+                Line("Tap the pin button to send now.")
             }
 
             if (ui.setupSteps.isNotEmpty()) {
@@ -147,6 +177,36 @@ fun SettingsScreen(ui: SettingsUi, act: SettingsActions) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun ClaudeCard(ui: SettingsUi, act: SettingsActions) {
+    var url by remember { mutableStateOf(ui.routineUrl) }
+    var token by remember { mutableStateOf("") }
+    Section("Claude") {
+        Line(when {
+            ui.claude.rejected -> "Routine rejected the last request — check the URL and token"
+            ui.claude.configured -> "Routine set up"
+            else -> "Not set up: memos wait for the hourly check"
+        })
+        OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Routine URL") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+        OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Routine token") }, singleLine = true,
+            placeholder = { if (ui.hasToken) Text("Saved — type to replace") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill("Save") { act.saveRoutine(url, token.ifBlank { null }); token = "" }
+            Pill("Test", act.testRoutine)
+        }
+        ui.testResult?.let { Line(it, small = true) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Line("Send to Claude automatically", small = false)
+            Spacer(Modifier.weight(1f))
+            Switch(ui.claude.auto, act.setAutoSend)
+        }
+        Line("After uploads, waits ${PinConfig.FIRE_DEBOUNCE_SECONDS} s to batch memos into one run. The hourly check stays on as a backup.", small = true)
     }
 }
 

@@ -127,6 +127,19 @@ Whisper loops on silence/noise. `no_context = true` (JNI) stops text carrying ac
 `TranscriptGuard` drops non-speech tags and repeated sentences; if the result is empty or more than
 half repeats, the transcript gets a `.skipped` marker and is never uploaded (kept locally 7 days).
 
+## Send now and the Claude routine
+
+- Tapping the pin button = **Send now** (`SendNow`): connect -> pull everything on the pin ->
+  wait for transcribe + upload -> fire the Claude routine. Taps during a run are ignored.
+- Routine fire: `POST <routine URL>` with the per-routine bearer token, `anthropic-version:
+  2026-10-21` (docs: https://platform.claude.com/docs/en/api/claude-code/routines-fire).
+  URL + token are typed in Settings › Claude, stored in EncryptedSharedPreferences, never logged.
+- Fires only when transcripts were uploaded since the last fire. Background uploads fire too
+  (toggle, default on): 60 s debounce, our cap 20 fires/hour (routine limit is 30). On 429 or cap,
+  the hourly scheduled run picks memos up — keep it as the backup.
+- Dot: green idle · amber working (pulses) · blue sent, ~2 min, then the ideas list refreshes ·
+  grey pin not connected · red needs attention (Drive, routine missing/rejected). Logic in `StatusModel`.
+
 ## Drive contract
 
 - PinLink only ever **creates** files in `Pin Inbox`. After upload a transcript belongs to the
@@ -140,9 +153,6 @@ half repeats, the transcript gets a `.skipped` marker and is never uploaded (kep
   keystore SHA-1. Building on another machine (different debug key) breaks Drive auth until that
   SHA-1 is added to the same client. The app's Drive folder is the one it created (drive.file scope).
 
-- **Faster delivery.** Memos reach Drive only after the next sync. Options: sync more often, or
-  send the bind token (cmd 1) on each connect, which may also stop the ~2 min link drop below.
-  The token would have to be stored on the phone — owner's call.
 - **Softer pin vibration.** Find a command to change or soften it.
 - **Hebrew transcription.** Needs a multilingual model (`base`/`small`, not `base.en`), language
   setting or auto-detect, and RTL-safe transcript files.

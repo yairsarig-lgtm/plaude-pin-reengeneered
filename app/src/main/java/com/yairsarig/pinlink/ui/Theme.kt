@@ -29,7 +29,8 @@ object Pocket {
     val outline = Color(0x52000000) // rgba(0,0,0,0.32): header buttons and the Filter pill
     val divider = Color(0x14000000)
     val green = Color(0xFF7A9A7E) // sage: connected and synced
-    val amber = Color(0xFFE0A23A)
+    val amber = Color(0xFFE0A23A) // working
+    val blue = Color(0xFF6F8FB8) // sent to Claude, waiting
     val grey = Color(0xFFB8B8B8)
     val danger = Color(0xFFC0392B)
     val reviewCard = Color(0xFFFBF3EA)
@@ -42,6 +43,8 @@ object Pocket {
     val shadow = Color(0x14000000)
     val iconStroke = 1.5f
     val gutter = 20.dp
+    val pulseMs = 900
+    val pulseMinAlpha = 0.35f
 
     val serif = FontFamily(
         Font(R.font.gelasio, FontWeight.Normal),

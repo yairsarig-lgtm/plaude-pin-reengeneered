@@ -1,6 +1,11 @@
 package com.yairsarig.pinlink.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -56,21 +62,26 @@ import com.yairsarig.pinlink.ideas.Idea
 import com.yairsarig.pinlink.ideas.IdeaFilter
 import com.yairsarig.pinlink.ideas.IdeasModel
 import com.yairsarig.pinlink.ideas.LogEntry
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Pin status for the header dot. */
-enum class PinStatus(val color: Color, val description: String) {
-    CONNECTED(Pocket.green, "Connected and synced"),
-    SYNCING(Pocket.amber, "Syncing"),
-    DISCONNECTED(Pocket.grey, "Pin not connected"),
-}
+val PinStatus.color: Color
+    get() = when (this) {
+        PinStatus.GREEN -> Pocket.green
+        PinStatus.AMBER -> Pocket.amber
+        PinStatus.BLUE -> Pocket.blue
+        PinStatus.GREY -> Pocket.grey
+        PinStatus.RED -> Pocket.danger
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     state: IdeasViewModel.State,
-    pinStatus: PinStatus,
-    onSyncNow: () -> Unit,
+    status: StatusView,
+    /** One-off messages (Send now results); each becomes a snackbar. */
+    messages: Flow<String>,
+    onSendNow: () -> Unit,
     onOpenSettings: () -> Unit,
     onRefresh: () -> Unit,
     onDelete: (Idea) -> Unit,
@@ -80,6 +91,8 @@ fun HomeScreen(
 ) {
     val snackbar = remember { SnackbarHostState() }
     var showFilter by remember { mutableStateOf(false) }
+
+    LaunchedEffect(messages) { messages.collect { snackbar.showSnackbar(it) } }
 
     // Undo snackbar for the row waiting out its undo window.
     val pending = state.pendingDelete
@@ -99,7 +112,7 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = Pocket.gutter, end = Pocket.gutter, top = 28.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                item { Header(pinStatus, IdeasModel.dateLine(IdeasModel.newToday(state.ideas)), onSyncNow, onOpenSettings) }
+                item { Header(status, IdeasModel.dateLine(IdeasModel.newToday(state.ideas)), onSendNow, onOpenSettings) }
                 item {
                     Row(Modifier.fillMaxWidth().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                         val title = if (state.filter == IdeaFilter.All) "All ideas" else state.filter.label
@@ -131,27 +144,34 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Header(status: PinStatus, dateLine: String, onSyncNow: () -> Unit, onOpenSettings: () -> Unit) {
+private fun Header(status: StatusView, dateLine: String, onSendNow: () -> Unit, onOpenSettings: () -> Unit) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("pocket•ideas", style = Pocket.wordmark, maxLines = 1, modifier = Modifier.weight(1f))
-            CircleButton(LineIcons.pin, status.description, onSyncNow, dot = status.color)
+            CircleButton(LineIcons.pin, "Send now. ${status.line}", onSendNow, dot = status.dot.color, pulse = status.pulsing)
             Spacer(Modifier.width(12.dp))
             CircleButton(LineIcons.gear, "Settings", onOpenSettings)
         }
         Text(dateLine, style = Pocket.dateLine, modifier = Modifier.padding(top = 12.dp))
+        Text(status.line, style = Pocket.small, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
-/** 48 dp outlined circle with a line icon; [dot] adds a status dot on the rim at one o'clock. */
+/** 48 dp outlined circle with a line icon; [dot] adds a status dot on the rim at one o'clock, [pulse] fades it in and out. */
 @Composable
-private fun CircleButton(icon: ImageVector, description: String, onClick: () -> Unit, dot: Color? = null) {
+private fun CircleButton(icon: ImageVector, description: String, onClick: () -> Unit, dot: Color? = null, pulse: Boolean = false) {
     Box(Modifier.size(48.dp)) {
         Box(Modifier.fillMaxSize().clip(CircleShape).border(1.dp, Pocket.outline, CircleShape).clickable(onClick = onClick),
             contentAlignment = Alignment.Center) {
             Icon(icon, description, Modifier.size(22.dp), tint = Pocket.ink)
         }
-        if (dot != null) Box(Modifier.offset(x = 36.dp, y = 2.dp).size(10.dp).background(dot, CircleShape))
+        if (dot != null) {
+            val alpha = if (pulse) {
+                rememberInfiniteTransition(label = "pulse").animateFloat(1f, Pocket.pulseMinAlpha,
+                    infiniteRepeatable(tween(Pocket.pulseMs), RepeatMode.Reverse), label = "dot").value
+            } else 1f
+            Box(Modifier.offset(x = 36.dp, y = 2.dp).size(10.dp).alpha(alpha).background(dot, CircleShape))
+        }
     }
 }
 

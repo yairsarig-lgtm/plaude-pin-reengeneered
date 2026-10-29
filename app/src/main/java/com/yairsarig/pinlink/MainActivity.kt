@@ -25,12 +25,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yairsarig.pinlink.ble.LinkState
 import com.yairsarig.pinlink.ble.WriteMode
+import com.yairsarig.pinlink.claude.ClaudeTrigger
+import com.yairsarig.pinlink.claude.FireResult
 import com.yairsarig.pinlink.housekeeping.DeviceSetup
 import com.yairsarig.pinlink.protocol.hexToBytes
 import com.yairsarig.pinlink.transcribe.ModelManager
 import com.yairsarig.pinlink.ui.HomeScreen
 import com.yairsarig.pinlink.ui.IdeasViewModel
-import com.yairsarig.pinlink.ui.PinStatus
+import com.yairsarig.pinlink.ui.StatusInputs
+import com.yairsarig.pinlink.ui.StatusModel
 import com.yairsarig.pinlink.ui.PocketTheme
 import com.yairsarig.pinlink.ui.SettingsActions
 import com.yairsarig.pinlink.ui.SettingsScreen
@@ -45,6 +48,7 @@ import java.io.File
 /** Pocket Ideas: the ideas list, with everything else behind ⚙️. Also hosts permission and Drive-consent flows. */
 class MainActivity : ComponentActivity() {
     private val controller by lazy { (application as PinLinkApp).controller }
+    private val sendNow by lazy { (application as PinLinkApp).sendNow }
     private var player: MediaPlayer? = null
 
     private val requiredPermissions: Array<String>
@@ -149,6 +153,11 @@ class MainActivity : ComponentActivity() {
         val driveConnected by DriveAuth.connected.collectAsStateWithLifecycle()
         val log by PinLog.lines.collectAsStateWithLifecycle()
         val grants by driveGrants
+        val bluetoothOn by controller.bluetoothOn.collectAsStateWithLifecycle()
+        val sendPhase by sendNow.phase.collectAsStateWithLifecycle()
+        val claude by ClaudeTrigger.state.collectAsStateWithLifecycle()
+        var now by remember { mutableStateOf(System.currentTimeMillis()) }
+        var testResult by remember { mutableStateOf<String?>(null) }
         var showSettings by remember { mutableStateOf(false) }
         var pipeline by remember { mutableStateOf(Pipeline.Status(0, 0)) }
         val scope = rememberCoroutineScope()
@@ -157,23 +166,30 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             while (true) {
                 pipeline = withContext(Dispatchers.IO) { Pipeline.status(this@MainActivity) }
+                now = System.currentTimeMillis()
                 delay(STATUS_POLL_MS)
             }
         }
         LaunchedEffect(grants) { if (grants > 0) ideas.refresh() }
+        // Claude usually has filed the memos by the time the blue dot clears: show them.
+        LaunchedEffect(claude.lastFireAt) {
+            val wait = claude.lastFireAt + PinConfig.CLAUDE_PROCESSING_MS - System.currentTimeMillis()
+            if (claude.lastFireAt == 0L || wait <= 0) return@LaunchedEffect
+            delay(wait)
+            now = System.currentTimeMillis()
+            ideas.refresh()
+        }
 
         val busy = pinRecording || transfer != null
-        val status = when {
-            link != LinkState.READY -> PinStatus.DISCONNECTED
-            busy || stored.isNotEmpty() || pipeline.pending > 0 -> PinStatus.SYNCING
-            else -> PinStatus.CONNECTED
-        }
+        val status = StatusModel.of(StatusInputs(bluetoothOn, link, pinRecording, transfer != null, stored.size,
+            pipeline, sendPhase, driveConnected, claude, now))
 
         if (showSettings) {
             BackHandler { showSettings = false }
             SettingsScreen(
                 SettingsUi(link, battery, stored.size, busy, driveConnected, ideas.sheetId, setupSteps.value,
-                    ModelManager(this).isReady, pipeline, controller.recordingsOnPhone(), log),
+                    ModelManager(this).isReady, pipeline, controller.recordingsOnPhone(), log,
+                    claude, ClaudeTrigger.routineUrl(), ClaudeTrigger.hasToken(), testResult),
                 SettingsActions(
                     back = { showSettings = false },
                     syncNow = controller::syncNow,
@@ -188,13 +204,20 @@ class MainActivity : ComponentActivity() {
                     startLive = { controller.startLiveSession() },
                     stopLive = { controller.stopLiveSession() },
                     sendRaw = ::sendRaw,
+                    saveRoutine = { url, token -> ClaudeTrigger.saveRoutine(url, token); testResult = null },
+                    testRoutine = {
+                        testResult = "Testing…"
+                        scope.launch { testResult = describe(ClaudeTrigger.fireTest()) }
+                    },
+                    setAutoSend = ClaudeTrigger::setAuto,
                 ),
             )
         } else {
             HomeScreen(
                 state = ideasState,
-                pinStatus = status,
-                onSyncNow = controller::syncNow,
+                status = status,
+                messages = sendNow.messages,
+                onSendNow = { if (!sendNow.start()) PinLog.i("Send now: already running, tap ignored") },
                 onOpenSettings = { showSettings = true },
                 onRefresh = ideas::refresh,
                 onDelete = ideas::delete,
@@ -203,6 +226,15 @@ class MainActivity : ComponentActivity() {
                 onReconnectDrive = { connectDrive(interactive = true) },
             )
         }
+    }
+
+    private fun describe(r: FireResult): String = when (r) {
+        is FireResult.Ok -> "Fired OK — the routine is running" + (r.sessionUrl?.let { "\n$it" } ?: "")
+        is FireResult.RateLimited -> "Rate limited by Claude (hourly limit)" + (r.retryAfterSec?.let { "; resets in ${it / 60} min" } ?: "")
+        is FireResult.Rejected -> "Rejected (${r.code}): ${r.message}"
+        is FireResult.Failed -> "Couldn't reach Claude: ${r.message}"
+        FireResult.NotConfigured -> "Enter an https:// routine URL and a token, then Save"
+        FireResult.Capped -> "Skipped: already ${PinConfig.MAX_FIRES_PER_HOUR} fires this hour"
     }
 
     private fun sendRaw(cmd: String, hex: String, mode: WriteMode) {
