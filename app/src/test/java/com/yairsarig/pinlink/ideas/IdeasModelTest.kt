@@ -76,27 +76,22 @@ class IdeasModelTest {
     @Test fun parsesLogAndKeepsNewestTen() {
         val log = listOf(listOf("Processed", "Source file", "Transcript", "Action taken", "Result")) +
             (1..12).map { listOf("2026-10-27 10:%02d".format(it), "f$it.txt", "t", "Filed idea", "OK") }
-        val recent = IdeasModel.recentLog(IdeasModel.parseLog(log))
+        val now = IdeasModel.parseTime("2026-10-27 12:00")!!
+        val recent = IdeasModel.recentLog(IdeasModel.parseLog(log), now)
         assertEquals(10, recent.size)
         assertEquals("f12.txt", recent.first().sourceFile)
     }
 
-    @Test fun listsGroupTagsWithTwoPlusIdeasNewestListFirst() {
-        fun idea(t: String, list: String, text: String) = Idea(t, text, list, "", "", "")
-        val ideas = listOf(
-            idea("2026-10-20 09:00", "Garden", "compost"),
-            idea("2026-10-28 09:00", "Books", "Dune"),
-            idea("2026-10-27 09:00", "garden", "basil"),
-            idea("2026-10-26 09:00", "Books", "Piranesi"),
-            idea("2026-10-29 09:00", "Home", "lease"),   // only one: a single
-            idea("2026-10-25 09:00", "", "untagged"),    // untagged: a single
-            idea("2026-10-21 09:00", "Garden", "rake"),
+    @Test fun recentLogKeepsOnlyTheLastSevenDays() {
+        fun e(t: String, f: String) = LogEntry(t, f, "", "Filed idea", "OK")
+        val now = IdeasModel.parseTime("2026-10-29 12:00")!!
+        val log = listOf(
+            e("2026-10-21 09:00", "old.txt"),      // 8 days ago: hidden
+            e("2026-10-22 13:00", "edge.txt"),     // just inside 7 days
+            e("2026-10-29 11:00", "new.txt"),
+            e("not a date", "unknown.txt"),        // age unknown: hidden
         )
-        val l = IdeasModel.lists(ideas)
-        assertEquals(listOf("Books", "Garden"), l.lists.map { it.name }) // Books' newest (28th) beats Garden's (27th)
-        assertEquals(listOf("basil", "rake", "compost"), l.lists[1].ideas.map { it.text })
-        assertEquals("Dune", l.lists[0].newest.text)
-        assertEquals(listOf("lease", "untagged"), l.singles.map { it.text })
-        assertEquals(ListsLayout(emptyList(), emptyList()), IdeasModel.lists(emptyList()))
+        assertEquals(listOf("new.txt", "edge.txt"), IdeasModel.recentLog(log, now).map { it.sourceFile })
+        assertEquals(emptyList<LogEntry>(), IdeasModel.recentLog(listOf(e("2026-10-01 09:00", "a.txt")), now))
     }
 }

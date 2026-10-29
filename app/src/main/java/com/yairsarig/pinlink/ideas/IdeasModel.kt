@@ -35,14 +35,6 @@ sealed class IdeaFilter {
     val label: String get() = when (this) { All -> "All"; NeedsReview -> "Needs review"; is Tag -> name }
 }
 
-/** One tag with its ideas, newest first; [name] is its most common spelling. */
-data class IdeaList(val name: String, val ideas: List<Idea>) {
-    val newest: Idea get() = ideas.first()
-}
-
-/** The Lists view: tags with [PinConfig.LIST_MIN_IDEAS]+ ideas as tiles, everything else as single cards. */
-data class ListsLayout(val lists: List<IdeaList>, val singles: List<Idea>)
-
 /** Pure functions over sheet values (as the Sheets API returns them: ragged rows of strings). */
 object IdeasModel {
 
@@ -62,8 +54,21 @@ object IdeasModel {
         ideas.withIndex().sortedWith(compareByDescending<IndexedValue<Idea>> { parseTime(it.value.recorded) ?: Long.MIN_VALUE }
             .thenByDescending { it.index }).map { it.value }
 
-    fun recentLog(entries: List<LogEntry>, n: Int = PinConfig.RECENT_ACTIONS): List<LogEntry> =
-        entries.withIndex().sortedByDescending { parseTime(it.value.processed) ?: it.index.toLong() }.take(n).map { it.value }
+    /**
+     * The newest [n] actions from the last [days] days, newest first. Rows whose time can't be
+     * parsed are left out (their age is unknown). Display only: the Log tab is never trimmed.
+     */
+    fun recentLog(
+        entries: List<LogEntry>,
+        nowMs: Long = System.currentTimeMillis(),
+        n: Int = PinConfig.RECENT_ACTIONS,
+        days: Long = PinConfig.RECENT_ACTIONS_DAYS,
+    ): List<LogEntry> {
+        val since = nowMs - days * 24 * 3600 * 1000
+        return entries.mapNotNull { e -> parseTime(e.processed)?.let { it to e } }
+            .filter { it.first in since..nowMs + 60_000 }
+            .sortedByDescending { it.first }.take(n).map { it.second }
+    }
 
     /**
      * Tag -> count over the List column, case-insensitive ("Garden" and "garden" are one tag,
@@ -74,20 +79,6 @@ object IdeasModel {
             .groupBy { it.lowercase() }.values
             .map { spellings -> spellings.groupingBy { it }.eachCount().maxBy { it.value }.key to spellings.size }
             .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first.lowercase() })
-
-    /**
-     * Groups by tag (case-insensitive, like [tagCounts]). Lists are ordered by their newest idea;
-     * singles (one-idea tags and untagged ideas) newest first.
-     */
-    fun lists(ideas: List<Idea>): ListsLayout {
-        val sorted = newestFirst(ideas)
-        val groups = sorted.filter { it.list.isNotBlank() }.groupBy { it.list.trim().lowercase() }.values
-        val lists = groups.filter { it.size >= PinConfig.LIST_MIN_IDEAS }
-            .map { g -> IdeaList(g.map { it.list.trim() }.groupingBy { it }.eachCount().maxBy { it.value }.key, g) }
-        val inLists = lists.flatMap { it.ideas }.toSet()
-        // Groups keep newestFirst order, so lists come out sorted by their newest idea already.
-        return ListsLayout(lists, sorted.filterNot { it in inLists })
-    }
 
     fun apply(filter: IdeaFilter, ideas: List<Idea>): List<Idea> = when (filter) {
         IdeaFilter.All -> ideas

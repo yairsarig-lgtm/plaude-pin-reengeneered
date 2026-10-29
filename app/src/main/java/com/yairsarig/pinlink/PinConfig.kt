@@ -123,9 +123,8 @@ object PinConfig {
     /** An idea "needs review" when its Status contains this (case-insensitive). */
     const val STATUS_NEEDS_REVIEW = "review"
     const val RECENT_ACTIONS = 10
-    /** A tag becomes a tile in the Lists view once it has this many ideas. */
-    const val LIST_MIN_IDEAS = 2
-    const val PREF_HOME_VIEW = "home_view"
+    /** Recent actions shows only the Log rows from this many days back. */
+    const val RECENT_ACTIONS_DAYS = 7L
     const val UNDO_WINDOW_MS = 5_000L
     const val SHEET_URL_PREFIX = "https://docs.google.com/spreadsheets/d/"
 

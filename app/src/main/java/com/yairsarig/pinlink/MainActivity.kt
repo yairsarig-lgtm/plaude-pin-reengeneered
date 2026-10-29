@@ -224,8 +224,6 @@ class MainActivity : ComponentActivity() {
                 onDelete = ideas::delete,
                 onUndo = ideas::undo,
                 onFilter = ideas::setFilter,
-                onSetView = ideas::setView,
-                onOpenList = ideas::openList,
                 onReconnectDrive = { connectDrive(interactive = true) },
             )
         }

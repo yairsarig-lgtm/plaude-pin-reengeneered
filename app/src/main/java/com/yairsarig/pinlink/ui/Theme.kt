@@ -57,7 +57,6 @@ object Pocket {
     val dateLine = TextStyle(fontFamily = serif, fontStyle = FontStyle.Italic, fontSize = 17.sp, color = muted)
     val ideaText = TextStyle(fontFamily = serif, fontSize = 20.sp, lineHeight = 27.sp, color = ink)
     val rowTitle = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ink)
-    val tileText = TextStyle(fontFamily = serif, fontSize = 16.sp, lineHeight = 21.sp, color = ink)
     val listTitle = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 26.sp, fontWeight = FontWeight.Bold,
         letterSpacing = (-0.8).sp, color = ink)
     val body = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 15.sp, lineHeight = 21.sp, color = ink)
