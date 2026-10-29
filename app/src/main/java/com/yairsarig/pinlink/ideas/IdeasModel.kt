@@ -35,6 +35,14 @@ sealed class IdeaFilter {
     val label: String get() = when (this) { All -> "All"; NeedsReview -> "Needs review"; is Tag -> name }
 }
 
+/** One tag with its ideas, newest first; [name] is its most common spelling. */
+data class IdeaList(val name: String, val ideas: List<Idea>) {
+    val newest: Idea get() = ideas.first()
+}
+
+/** The Lists view: tags with [PinConfig.LIST_MIN_IDEAS]+ ideas as tiles, everything else as single cards. */
+data class ListsLayout(val lists: List<IdeaList>, val singles: List<Idea>)
+
 /** Pure functions over sheet values (as the Sheets API returns them: ragged rows of strings). */
 object IdeasModel {
 
@@ -66,6 +74,20 @@ object IdeasModel {
             .groupBy { it.lowercase() }.values
             .map { spellings -> spellings.groupingBy { it }.eachCount().maxBy { it.value }.key to spellings.size }
             .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first.lowercase() })
+
+    /**
+     * Groups by tag (case-insensitive, like [tagCounts]). Lists are ordered by their newest idea;
+     * singles (one-idea tags and untagged ideas) newest first.
+     */
+    fun lists(ideas: List<Idea>): ListsLayout {
+        val sorted = newestFirst(ideas)
+        val groups = sorted.filter { it.list.isNotBlank() }.groupBy { it.list.trim().lowercase() }.values
+        val lists = groups.filter { it.size >= PinConfig.LIST_MIN_IDEAS }
+            .map { g -> IdeaList(g.map { it.list.trim() }.groupingBy { it }.eachCount().maxBy { it.value }.key, g) }
+        val inLists = lists.flatMap { it.ideas }.toSet()
+        // Groups keep newestFirst order, so lists come out sorted by their newest idea already.
+        return ListsLayout(lists, sorted.filterNot { it in inLists })
+    }
 
     fun apply(filter: IdeaFilter, ideas: List<Idea>): List<Idea> = when (filter) {
         IdeaFilter.All -> ideas

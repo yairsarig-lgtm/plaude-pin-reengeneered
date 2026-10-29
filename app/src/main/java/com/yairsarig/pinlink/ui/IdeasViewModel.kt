@@ -9,6 +9,7 @@ import com.yairsarig.pinlink.ideas.Idea
 import com.yairsarig.pinlink.ideas.IdeaFilter
 import com.yairsarig.pinlink.ideas.IdeasModel
 import com.yairsarig.pinlink.ideas.IdeasRepository
+import com.yairsarig.pinlink.ideas.ListsLayout
 import com.yairsarig.pinlink.ideas.LogEntry
 import com.yairsarig.pinlink.upload.DriveAuth
 import com.yairsarig.pinlink.upload.DriveSession
@@ -21,7 +22,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** The home screen's state: ideas from the app's sheet, the filter, and delete-with-undo. */
+/** Home screen layout: tag tiles (default) or the flat list. */
+enum class HomeView { LISTS, ALL }
+
+/** The home screen's state: ideas from the app's sheet, the view and filter, and delete-with-undo. */
 class IdeasViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = IdeasRepository(app)
 
@@ -35,13 +39,20 @@ class IdeasViewModel(app: Application) : AndroidViewModel(app) {
         val pendingDelete: Idea? = null,
         val error: String? = null,
         val needsDrive: Boolean = false,
+        val view: HomeView = HomeView.LISTS,
+        /** Tag whose list screen is open (from a Lists tile), null = home. */
+        val openList: String? = null,
     ) {
         val visible: List<Idea> get() = IdeasModel.apply(filter, ideas)
         val tags: List<Pair<String, Int>> get() = IdeasModel.tagCounts(ideas)
         val needsReviewCount: Int get() = ideas.count { it.needsReview }
+        val lists: ListsLayout get() = IdeasModel.lists(ideas)
+        val openListIdeas: List<Idea> get() = openList?.let { IdeasModel.apply(IdeaFilter.Tag(it), ideas) }.orEmpty()
     }
 
-    private val _state = MutableStateFlow(State())
+    private val prefs = app.getSharedPreferences(PinConfig.PREFS_NAME, android.content.Context.MODE_PRIVATE)
+    private val _state = MutableStateFlow(State(
+        view = runCatching { HomeView.valueOf(prefs.getString(PinConfig.PREF_HOME_VIEW, null)!!) }.getOrDefault(HomeView.LISTS)))
     val state: StateFlow<State> = _state
     val sheetId: String? get() = repo.sheetId
 
@@ -82,6 +93,13 @@ class IdeasViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setFilter(f: IdeaFilter) = _state.update { it.copy(filter = f) }
+
+    fun setView(v: HomeView) {
+        prefs.edit().putString(PinConfig.PREF_HOME_VIEW, v.name).apply()
+        _state.update { it.copy(view = v) }
+    }
+
+    fun openList(name: String?) = _state.update { it.copy(openList = name) }
 
     /** Hides the row now; deletes it from the sheet after the undo window unless [undo] is called. */
     fun delete(idea: Idea) {

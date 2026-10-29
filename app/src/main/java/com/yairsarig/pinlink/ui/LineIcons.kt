@@ -28,6 +28,13 @@ object LineIcons {
         "M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
         "M16 2v4", "M8 2v4", "M3 10h18")
     val check = icon("check", "M20 6 9 17l-5-5")
+    val grid = icon("layout-grid",
+        "M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+        "M15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+        "M15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+        "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z")
+    val lines = icon("menu", "M4 6h16", "M4 12h16", "M4 18h16")
+    val arrowLeft = icon("arrow-left", "m12 19-7-7 7-7", "M19 12H5")
 
     private fun icon(name: String, vararg paths: String): ImageVector {
         val b = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)

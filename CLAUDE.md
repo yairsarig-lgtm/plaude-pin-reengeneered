@@ -102,7 +102,7 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - [x] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
 - [x] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
 - [x] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
-- [x] **Phase 6 — Polish.** "Pocket Ideas" home screen: ideas read from the app-owned **Pin Ideas** sheet, filter, delete with Undo, Recent actions from the sheet's Log tab; status dot, battery, queue counts. Device-tested 2026-10-29.
+- [x] **Phase 6 — Polish.** "Pocket Ideas" home screen: ideas read from the app-owned **Pin Ideas** sheet, filter, delete with Undo, Recent actions from the sheet's Log tab; status dot, battery, queue counts. Device-tested 2026-10-29. Home has a Lists view (tag tiles for 2+ ideas, single ideas below, tap a tile for its list) and an All view (flat list + filter); the last view is remembered.
 
 ## Device notes (owner's phone: Xiaomi, HyperOS)
 

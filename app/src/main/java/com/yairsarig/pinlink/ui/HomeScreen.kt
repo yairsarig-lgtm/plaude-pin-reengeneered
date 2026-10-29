@@ -9,7 +9,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -60,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import com.yairsarig.pinlink.PinConfig
 import com.yairsarig.pinlink.ideas.Idea
 import com.yairsarig.pinlink.ideas.IdeaFilter
+import com.yairsarig.pinlink.ideas.IdeaList
 import com.yairsarig.pinlink.ideas.IdeasModel
 import com.yairsarig.pinlink.ideas.LogEntry
 import kotlinx.coroutines.flow.Flow
@@ -87,6 +91,9 @@ fun HomeScreen(
     onDelete: (Idea) -> Unit,
     onUndo: () -> Unit,
     onFilter: (IdeaFilter) -> Unit,
+    onSetView: (HomeView) -> Unit,
+    /** Opens a tag's list screen; null closes it. */
+    onOpenList: (String?) -> Unit,
     onReconnectDrive: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
@@ -105,6 +112,9 @@ fun HomeScreen(
         if (result == SnackbarResult.ActionPerformed) onUndo() else snackbar.currentSnackbarData?.dismiss()
     }
 
+    val openList = state.openList
+    if (openList != null) BackHandler { onOpenList(null) }
+
     Box(Modifier.fillMaxSize().background(Pocket.background).safeDrawingPadding()) {
         PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             LazyColumn(
@@ -112,24 +122,53 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = Pocket.gutter, end = Pocket.gutter, top = 28.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                if (openList != null) {
+                    val ideas = state.openListIdeas
+                    item { ListHeader(openList, ideas.size) { onOpenList(null) } }
+                    if (ideas.isEmpty()) item { Text("No ideas here any more.", style = Pocket.small, modifier = Modifier.padding(8.dp)) }
+                    items(ideas, key = { it.cells.joinToString("\u0001") }) { idea -> IdeaCard(idea, onDelete) }
+                    return@LazyColumn
+                }
                 item { Header(status, IdeasModel.dateLine(IdeasModel.newToday(state.ideas)), onSendNow, onOpenSettings) }
+                val lists = state.lists
                 item {
                     Row(Modifier.fillMaxWidth().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                        val title = if (state.filter == IdeaFilter.All) "All ideas" else state.filter.label
-                        SectionLabel("$title · ${state.visible.size}", Modifier.weight(1f))
-                        FilterPill(if (state.filter == IdeaFilter.All) "Filter" else state.filter.label) { showFilter = true }
+                        val title = when {
+                            state.view == HomeView.LISTS -> "Lists · ${lists.lists.size}"
+                            state.filter == IdeaFilter.All -> "All ideas · ${state.visible.size}"
+                            else -> "${state.filter.label} · ${state.visible.size}"
+                        }
+                        SectionLabel(title, Modifier.weight(1f))
+                        if (state.view == HomeView.ALL) {
+                            CircleButton(LineIcons.funnel, "Filter", { showFilter = true }, size = 44.dp, iconSize = 20.dp)
+                            Spacer(Modifier.width(10.dp))
+                        }
+                        ViewSwitch(state.view, onSetView)
                     }
                 }
                 when {
                     state.needsDrive -> item { Notice("Google Drive isn't connected.", "Reconnect", onReconnectDrive) }
                     state.error != null && state.ideas.isEmpty() -> item { Notice(state.error, "Try again", onRefresh) }
                     !state.loaded -> item { Text("Loading…", style = Pocket.small, modifier = Modifier.padding(8.dp)) }
-                    state.visible.isEmpty() -> item {
-                        Text(if (state.filter == IdeaFilter.All) "No ideas yet. Press the pin and talk." else "Nothing under “${state.filter.label}”.",
-                            style = Pocket.small, modifier = Modifier.padding(8.dp))
+                    state.ideas.isEmpty() -> item { Text("No ideas yet. Press the pin and talk.", style = Pocket.small, modifier = Modifier.padding(8.dp)) }
+                    state.view == HomeView.ALL && state.visible.isEmpty() -> item {
+                        Text("Nothing under “${state.filter.label}”.", style = Pocket.small, modifier = Modifier.padding(8.dp))
                     }
                 }
-                items(state.visible, key = { it.cells.joinToString("\u0001") }) { idea -> IdeaCard(idea, onDelete) }
+                if (state.view == HomeView.ALL) {
+                    items(state.visible, key = { it.cells.joinToString("\u0001") }) { idea -> IdeaCard(idea, onDelete) }
+                } else {
+                    items(lists.lists.chunked(2), key = { row -> "tiles:" + row.joinToString("\u0001") { it.name } }) { row ->
+                        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            for (l in row) ListTile(l, Modifier.weight(1f).fillMaxHeight()) { onOpenList(l.name) }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    if (lists.singles.isNotEmpty()) {
+                        item { SectionLabel("Single ideas · ${lists.singles.size}", Modifier.padding(top = 18.dp)) }
+                        items(lists.singles, key = { it.cells.joinToString("\u0001") }) { idea -> IdeaCard(idea, onDelete) }
+                    }
+                }
                 item { RecentActions(state.recentLog, Modifier.padding(top = 10.dp)) }
             }
         }
@@ -157,13 +196,14 @@ private fun Header(status: StatusView, dateLine: String, onSendNow: () -> Unit, 
     }
 }
 
-/** 48 dp outlined circle with a line icon; [dot] adds a status dot on the rim at one o'clock, [pulse] fades it in and out. */
+/** Outlined circle (48 dp) with a line icon; [dot] adds a status dot on the rim at one o'clock, [pulse] fades it in and out. */
 @Composable
-private fun CircleButton(icon: ImageVector, description: String, onClick: () -> Unit, dot: Color? = null, pulse: Boolean = false) {
-    Box(Modifier.size(48.dp)) {
+private fun CircleButton(icon: ImageVector, description: String, onClick: () -> Unit, dot: Color? = null, pulse: Boolean = false,
+                         size: Dp = 48.dp, iconSize: Dp = 22.dp) {
+    Box(Modifier.size(size)) {
         Box(Modifier.fillMaxSize().clip(CircleShape).border(1.dp, Pocket.outline, CircleShape).clickable(onClick = onClick),
             contentAlignment = Alignment.Center) {
-            Icon(icon, description, Modifier.size(22.dp), tint = Pocket.ink)
+            Icon(icon, description, Modifier.size(iconSize), tint = Pocket.ink)
         }
         if (dot != null) {
             val alpha = if (pulse) {
@@ -175,13 +215,49 @@ private fun CircleButton(icon: ImageVector, description: String, onClick: () -> 
     }
 }
 
+/** Segmented pill: grid = Lists view, three lines = All view. */
 @Composable
-private fun FilterPill(text: String, onClick: () -> Unit) {
-    Row(Modifier.clip(Pocket.pillShape).border(1.dp, Pocket.outline, Pocket.pillShape).clickable(onClick = onClick)
-        .padding(start = 14.dp, end = 18.dp, top = 9.dp, bottom = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(LineIcons.funnel, null, Modifier.size(18.dp), tint = Pocket.ink)
-        Spacer(Modifier.width(8.dp))
-        Text(text, style = Pocket.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun ViewSwitch(view: HomeView, onSet: (HomeView) -> Unit) {
+    Row(Modifier.clip(Pocket.pillShape).border(1.dp, Pocket.outline, Pocket.pillShape).padding(3.dp)) {
+        Segment(LineIcons.grid, "Lists view", view == HomeView.LISTS) { onSet(HomeView.LISTS) }
+        Segment(LineIcons.lines, "All ideas view", view == HomeView.ALL) { onSet(HomeView.ALL) }
+    }
+}
+
+@Composable
+private fun Segment(icon: ImageVector, description: String, selected: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(width = 42.dp, height = 36.dp).clip(Pocket.pillShape)
+        .background(if (selected) Pocket.card else Color.Transparent).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        Icon(icon, description, Modifier.size(18.dp), tint = if (selected) Pocket.ink else Pocket.muted)
+    }
+}
+
+/** Compact tile for a tag: name + count, its newest idea, when it was added. Tap opens the list. */
+@Composable
+private fun ListTile(list: IdeaList, modifier: Modifier, onOpen: () -> Unit) {
+    Column(modifier.pocketCard().clip(Pocket.corner).clickable(onClick = onOpen).padding(start = 16.dp, end = 14.dp, top = 14.dp, bottom = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(list.name, style = Pocket.body.copy(fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f))
+            Text("${list.ideas.size}", style = Pocket.small, modifier = Modifier.padding(start = 8.dp))
+        }
+        Text(list.newest.text.ifBlank { list.newest.originalWording }, style = Pocket.tileText, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+        Spacer(Modifier.weight(1f))
+        Text(IdeasModel.timeLabel(list.newest.recorded), style = Pocket.small.copy(fontSize = 12.sp), maxLines = 1,
+            modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** Title row of a tag's list screen. */
+@Composable
+private fun ListHeader(name: String, count: Int, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTap(LineIcons.arrowLeft, "Back", Pocket.ink, size = 24.dp, onClick = onBack)
+        Spacer(Modifier.width(6.dp))
+        Text(name, style = Pocket.listTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(if (count == 1) "1 idea" else "$count ideas", style = Pocket.small, modifier = Modifier.padding(start = 10.dp))
     }
 }
 
