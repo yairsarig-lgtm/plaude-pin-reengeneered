@@ -187,8 +187,9 @@ class MainActivity : ComponentActivity() {
         if (showSettings) {
             BackHandler { showSettings = false }
             SettingsScreen(
-                SettingsUi(link, battery, stored.size, busy, driveConnected, ideas.sheetId, setupSteps.value,
-                    ModelManager(this).isReady, pipeline, controller.recordingsOnPhone(), log,
+                SettingsUi(link, battery, stored.size, busy, driveConnected, ideas.sheetId,
+                    DeviceSetup.Step.entries.filter { it == DeviceSetup.Step.BATTERY_EXEMPTION || setup.isXiaomi }, setupSteps.value,
+                    ModelManager(this).isReady, pipeline, Pipeline.lastUploadAt(this), controller.recordingsOnPhone(), log,
                     claude, ClaudeTrigger.routineUrl(), ClaudeTrigger.hasToken(), testResult),
                 SettingsActions(
                     back = { showSettings = false },

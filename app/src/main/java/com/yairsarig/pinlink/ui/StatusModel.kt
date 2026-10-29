@@ -9,13 +9,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** The pin button's dot. [legend] is the Settings › Status colors line. Colors live in [Pocket]. */
-enum class PinStatus(val legend: String) {
-    GREEN("Connected to the pin, nothing waiting"),
-    AMBER("Working: pulling from the pin, transcribing or uploading"),
-    BLUE("Sent to Claude, waiting for it to process (about 2 minutes)"),
-    GREY("Pin not connected: out of range, Bluetooth off, or reconnecting"),
-    RED("Needs attention: Drive disconnected, or the Claude token is missing or rejected"),
+/** The pin button's dot. [short] is its Settings › Status colors line. Colors live in [Pocket]. */
+enum class PinStatus(val short: String) {
+    GREEN("Connected, nothing waiting"),
+    AMBER("Working: pulling, transcribing, uploading"),
+    BLUE("Sent to Claude, processing (~2 min)"),
+    GREY("Pin not connected"),
+    RED("Needs attention: Drive or Claude token"),
 }
 
 /** Everything the dot and the status line depend on. */

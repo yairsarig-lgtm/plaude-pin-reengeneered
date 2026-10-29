@@ -28,6 +28,7 @@ object Pocket {
     val frame = Color(0x1F000000) // rgba(0,0,0,0.12): light outlines (Recent actions card, settings pills)
     val outline = Color(0x52000000) // rgba(0,0,0,0.32): header buttons and the Filter pill
     val divider = Color(0x14000000)
+    val hairline = Color(0x14000000) // rgba(0,0,0,0.08): dividers inside settings cards
     val green = Color(0xFF7A9A7E) // sage: connected and synced
     val amber = Color(0xFFE0A23A) // working
     val blue = Color(0xFF6F8FB8) // sent to Claude, waiting
@@ -55,6 +56,7 @@ object Pocket {
         letterSpacing = (-1.4).sp, color = ink)
     val dateLine = TextStyle(fontFamily = serif, fontStyle = FontStyle.Italic, fontSize = 17.sp, color = muted)
     val ideaText = TextStyle(fontFamily = serif, fontSize = 20.sp, lineHeight = 27.sp, color = ink)
+    val rowTitle = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ink)
     val tileText = TextStyle(fontFamily = serif, fontSize = 16.sp, lineHeight = 21.sp, color = ink)
     val listTitle = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 26.sp, fontWeight = FontWeight.Bold,
         letterSpacing = (-0.8).sp, color = ink)

@@ -76,6 +76,11 @@ object Pipeline {
         return Status(transcribe, upload)
     }
 
+    /** When the newest transcript reached Drive (its marker's time), null if none on the phone. */
+    fun lastUploadAt(context: Context): Long? =
+        transcriptsDir(context).listFiles { f -> f.name.endsWith(PinConfig.UPLOADED_MARKER_EXT) }
+            ?.maxOfOrNull { it.lastModified() }
+
     /** Re-queues anything a crash or reboot left half-way. Safe to call any time (app start, after Connect Drive). */
     fun resumePending(context: Context) {
         val captures = recordingsDir(context).listFiles { f -> f.name.endsWith(PinConfig.SYNC_SUFFIX + PinConfig.RAW_PACKET_EXT) }.orEmpty()
