@@ -101,6 +101,10 @@ object PinConfig {
     const val WHISPER_LANGUAGE = "en"
     const val WHISPER_MAX_THREADS = 4
     const val LOG_TRANSCRIPT_CHARS = 120
+    /** Whisper loop guard: skip upload when more than this share of sentences are repeats. */
+    const val TRANSCRIPT_MAX_REPEAT_FRACTION = 0.5
+    /** Beside a transcript the guard judged empty/looping: never uploaded, cleaned up like an uploaded one. */
+    const val SKIPPED_MARKER_EXT = ".skipped"
 
     // --- Drive upload ---
     const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"

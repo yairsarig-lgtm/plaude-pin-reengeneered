@@ -24,6 +24,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // Once uploaded, a transcript belongs to the downstream processor, which moves it out of the
         // inbox (e.g. to "Pin Done"). Never touch it again.
         if (marker.exists()) return@withContext Result.success()
+        if (Pipeline.skippedMarker(transcript).exists()) return@withContext Result.success()
         if (!transcript.exists()) return@withContext Result.failure().also { PinLog.e("Upload: ${transcript.name} missing") }
 
         try {

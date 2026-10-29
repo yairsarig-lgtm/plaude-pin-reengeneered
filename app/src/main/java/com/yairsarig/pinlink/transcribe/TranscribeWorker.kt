@@ -27,17 +27,27 @@ class TranscribeWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 val model = ModelManager(applicationContext).ensureModel()
                 val pcm = OpusDecoder.decodeToPcm(capture)
                 val samples = Resampler(pcm.sampleRate / PinConfig.WHISPER_SAMPLE_RATE).downsample(pcm.samples)
-                val text = WhisperEngine.transcribe(model, samples)
+                val raw = WhisperEngine.transcribe(model, samples)
+                val guarded = TranscriptGuard.clean(raw)
+                // Skipped memos keep the raw text locally for inspection; the marker goes first so
+                // the transcript never exists without it.
+                if (!guarded.upload) Pipeline.skippedMarker(out).writeText(raw)
                 val tmp = File(out.path + ".tmp")
-                tmp.writeText(Transcript.render(sessionId, text))
+                tmp.writeText(Transcript.render(sessionId, guarded.text))
                 check(tmp.renameTo(out)) { "rename failed" }
-                PinLog.i("Transcript ${out.name}: ${text.trim().take(PinConfig.LOG_TRANSCRIPT_CHARS)}")
+                if (guarded.upload) {
+                    PinLog.i("Transcript ${out.name}: ${guarded.text.take(PinConfig.LOG_TRANSCRIPT_CHARS)}" +
+                        if (guarded.repeats > 0) " (dropped ${guarded.repeats} repeats)" else "")
+                } else {
+                    PinLog.w("Transcript ${out.name} empty or looping (${guarded.repeats}/${guarded.sentences} repeats) — not uploading: " +
+                        raw.trim().take(PinConfig.LOG_TRANSCRIPT_CHARS))
+                }
             } catch (t: Throwable) {
                 PinLog.e("Transcribe ${capture.name} failed (attempt ${runAttemptCount + 1})", t)
                 return@withContext if (runAttemptCount < PinConfig.WORK_MAX_ATTEMPTS) Result.retry() else Result.failure()
             }
         }
-        Pipeline.enqueueUpload(applicationContext, sessionId)
+        if (!Pipeline.skippedMarker(out).exists()) Pipeline.enqueueUpload(applicationContext, sessionId)
         Result.success()
     }
 }

@@ -102,7 +102,7 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - [x] **Phase 3 — Offline transcription.** whisper.cpp via JNI (or an existing Android binding), English `base.en` model bundled or downloaded on first run. Fallback: Vosk English small model.
 - [x] **Phase 4 — Drive upload.** Google Sign-In with Drive scope `drive.file`; create/find folder `Pin Inbox`; upload `YYYY-MM-DD_HH-MM-SS.txt` containing the transcript plus a header line with the recording timestamp in ISO 8601 with the phone's offset (Asia/Jerusalem).
 - [x] **Phase 5 — Background robustness.** Foreground service with persistent notification, auto-reconnect with backoff, boot receiver, battery-optimization exemption prompt, WorkManager for transcription and upload.
-- [ ] **Phase 6 — Polish.** Status screen: connection state, battery, queue counts, last upload. Notification when a memo is uploaded.
+- [x] **Phase 6 — Polish.** "Pocket Ideas" home screen: ideas read from the app-owned **Pin Ideas** sheet, filter, delete with Undo, Recent actions from the sheet's Log tab; status dot, battery, queue counts. Device-tested 2026-10-29.
 
 ## Device notes (owner's phone: Xiaomi, HyperOS)
 
@@ -114,6 +114,18 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - BOOT_COMPLETED only arrives after the first unlock following a reboot (normal Android).
 - When the Bluetooth adapter turns off, GATT clients may get no disconnect callback. The app
   watches ACTION_STATE_CHANGED and pings a quiet link every 45 s (cmd 9) to catch dead links.
+
+## Pin Ideas sheet
+
+- Spreadsheet ID: `1BFTqawJ0ZN4UU-NAUYpHmQB1BAlbWRHm2g7OJJu60_s` (owned by the app, created via `drive.file`).
+  Tabs `Ideas` and `Log`; headers in `PinConfig`. The hourly Claude task writes it; the app reads
+  it and deletes rows (with Undo).
+
+## Transcription guard
+
+Whisper loops on silence/noise. `no_context = true` (JNI) stops text carrying across windows;
+`TranscriptGuard` drops non-speech tags and repeated sentences; if the result is empty or more than
+half repeats, the transcript gets a `.skipped` marker and is never uploaded (kept locally 7 days).
 
 ## Drive contract
 
@@ -128,7 +140,12 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
   keystore SHA-1. Building on another machine (different debug key) breaks Drive auth until that
   SHA-1 is added to the same client. The app's Drive folder is the one it created (drive.file scope).
 
-- Later: find a command to change or soften the pin's vibration.
+- **Faster delivery.** Memos reach Drive only after the next sync. Options: sync more often, or
+  send the bind token (cmd 1) on each connect, which may also stop the ~2 min link drop below.
+  The token would have to be stored on the phone — owner's call.
+- **Softer pin vibration.** Find a command to change or soften it.
+- **Hebrew transcription.** Needs a multilingual model (`base`/`small`, not `base.en`), language
+  setting or auto-detect, and RTL-safe transcript files.
 - Low priority: phone-initiated "Start live" is slow and also makes the pin record. Works.
 - The pin drops the link ~2 min after every connect (cmd 109 is not a keep-alive). Harmless now
   (auto-reconnect + resumable sync). Could test whether sending cmd 1 per connection stops it, but

@@ -33,6 +33,9 @@ object Pipeline {
     fun transcriptsDir(context: Context) = File(context.getExternalFilesDir(null), PinConfig.DIR_TRANSCRIPTS).apply { mkdirs() }
     fun transcriptFile(context: Context, sessionId: Long) = File(transcriptsDir(context), Transcript.fileName(sessionId))
     fun uploadedMarker(transcript: File) = File(transcript.path + PinConfig.UPLOADED_MARKER_EXT)
+    fun skippedMarker(transcript: File) = File(transcript.path + PinConfig.SKIPPED_MARKER_EXT)
+    /** Uploaded, or deliberately not (empty/looping transcript). Either way nothing left to do. */
+    fun isFinished(transcript: File) = uploadedMarker(transcript).exists() || skippedMarker(transcript).exists()
 
     fun enqueueTranscription(context: Context, capture: File, sessionId: Long) {
         // The first run downloads the 148 MB model: wait for Wi-Fi so it never burns mobile data.
@@ -68,7 +71,7 @@ object Pipeline {
         for (c in captures) {
             val sid = sessionIdOf(c) ?: continue
             val t = transcriptFile(context, sid)
-            if (!t.exists()) transcribe++ else if (!uploadedMarker(t).exists()) upload++
+            if (!t.exists()) transcribe++ else if (!isFinished(t)) upload++
         }
         return Status(transcribe, upload)
     }
@@ -80,7 +83,7 @@ object Pipeline {
             val sid = sessionIdOf(c) ?: continue
             val transcript = transcriptFile(context, sid)
             if (!transcript.exists()) enqueueTranscription(context, c, sid)
-            else if (!uploadedMarker(transcript).exists()) enqueueUpload(context, sid, ExistingWorkPolicy.REPLACE)
+            else if (!isFinished(transcript)) enqueueUpload(context, sid, ExistingWorkPolicy.REPLACE)
         }
     }
 

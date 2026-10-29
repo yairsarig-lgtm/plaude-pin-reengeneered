@@ -45,6 +45,17 @@ class RetentionTest {
         assertEquals(emptyList<String>(), select(t, r, l))
     }
 
+    @Test fun deletesSkippedMemoAfterAWeek() {
+        val t = tmp.newFolder("t"); val r = tmp.newFolder("r"); val l = tmp.newFolder("l")
+        file(t, "2026-10-01_10-00-00.txt", 9)
+        file(t, "2026-10-01_10-00-00.txt.skipped", 9)
+        file(r, "2026-10-01_10-00-00_sync.opuspk", 9)
+        file(t, "2026-10-20_10-00-00.txt", 1)
+        file(t, "2026-10-20_10-00-00.txt.skipped", 1) // too recent
+        assertEquals(listOf("2026-10-01_10-00-00.txt", "2026-10-01_10-00-00.txt.skipped",
+            "2026-10-01_10-00-00_sync.opuspk"), select(t, r, l))
+    }
+
     @Test fun deletesOldPreviewsAndLogsOnly() {
         val t = tmp.newFolder("t"); val r = tmp.newFolder("r"); val l = tmp.newFolder("l")
         file(r, "2026-10-01_10-00-00_live.opuspk", 9)

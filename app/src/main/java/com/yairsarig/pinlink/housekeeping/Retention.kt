@@ -7,7 +7,8 @@ import java.io.File
  * What local files may be deleted. Pure (file listing + clock in, list out) so it's unit-testable.
  *
  * - A memo's files (transcript, upload marker, captures, WAVs) go once its transcript has been in
- *   Drive for [maxAgeMs], measured from the upload marker's time.
+ *   Drive for [maxAgeMs], measured from the upload marker's time. A `.skipped` marker (empty or
+ *   looping transcript, never uploaded) counts the same way.
  * - Live previews and WAVs go after [maxAgeMs] regardless (the `_sync` capture is the real copy).
  * - Logs go after [maxAgeMs].
  * - Never: a `_sync` or `_partial` capture whose transcript isn't uploaded yet.
@@ -19,9 +20,10 @@ object Retention {
         val out = mutableListOf<File>()
         val recordings = recordingsDir.listFiles().orEmpty()
 
-        for (marker in transcriptsDir.listFiles { f -> f.name.endsWith(PinConfig.UPLOADED_MARKER_EXT) }.orEmpty()) {
+        val markerExts = listOf(PinConfig.UPLOADED_MARKER_EXT, PinConfig.SKIPPED_MARKER_EXT)
+        for (marker in transcriptsDir.listFiles { f -> markerExts.any(f.name::endsWith) }.orEmpty()) {
             if (!old(marker)) continue
-            val transcript = File(marker.path.removeSuffix(PinConfig.UPLOADED_MARKER_EXT))
+            val transcript = File(markerExts.fold(marker.path) { p, ext -> p.removeSuffix(ext) })
             val stamp = transcript.name.removeSuffix(PinConfig.TRANSCRIPT_EXT)
             out += marker
             if (transcript.exists()) out += transcript
