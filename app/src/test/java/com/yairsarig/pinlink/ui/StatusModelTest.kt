@@ -49,6 +49,10 @@ class StatusModelTest {
         assertEquals(PinStatus.GREY to "Bluetooth is off", of(idle.copy(link = LinkState.DISCONNECTED, bluetoothOn = false)))
     }
 
+    @Test fun pausedIsGrey() {
+        assertEquals(PinStatus.GREY to "Paused · tap the pin to resume", of(idle.copy(link = LinkState.DISCONNECTED, paused = true)))
+    }
+
     @Test fun problemsAreRed() {
         assertEquals(PinStatus.RED to "Drive needs reconnecting", of(idle.copy(driveConnected = false, pipeline = Pipeline.Status(0, 1))))
         assertEquals(PinStatus.RED to "Add your Claude routine in Settings", of(idle.copy(claude = ClaudeTrigger.State())))

@@ -30,6 +30,7 @@ data class StatusInputs(
     val driveConnected: Boolean?,
     val claude: ClaudeTrigger.State,
     val now: Long,
+    val paused: Boolean = false,
 )
 
 data class StatusView(val dot: PinStatus, val line: String) {
@@ -57,6 +58,7 @@ object StatusModel {
             s.claude.firing || (s.claude.scheduled && s.claude.auto && s.claude.uploadsSinceFire > 0) -> amber("Sending to Claude…")
             s.claude.lastFireAt > 0 && s.now - s.claude.lastFireAt < PinConfig.CLAUDE_PROCESSING_MS ->
                 StatusView(PinStatus.BLUE, "Sent to Claude ✓ " + clock.format(Instant.ofEpochMilli(s.claude.lastFireAt).atZone(zone)))
+            s.paused -> StatusView(PinStatus.GREY, "Paused · tap the pin to resume")
             !s.bluetoothOn -> StatusView(PinStatus.GREY, "Bluetooth is off")
             s.link == LinkState.CONNECTING -> StatusView(PinStatus.GREY, "Reconnecting to pin…")
             !linked -> StatusView(PinStatus.GREY, "Pin not in range")

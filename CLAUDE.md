@@ -114,6 +114,20 @@ Also check: the pin may only accept one bound app. It may need to be unbound/res
 - BOOT_COMPLETED only arrives after the first unlock following a reboot (normal Android).
 - When the Bluetooth adapter turns off, GATT clients may get no disconnect callback. The app
   watches ACTION_STATE_CHANGED and pings a quiet link every 45 s (cmd 9) to catch dead links.
+- HyperOS blocks `adb shell input` unless Developer options > "USB debugging (Security settings)" is on.
+
+## Battery: looking for the pin
+
+- Background tries are one low-power scan (12 s, filtered on the saved address, because Android pauses
+  unfiltered scans with the screen off). The app connects only once the pin is seen. Waits between
+  tries: 5 s, 15 s, 30 s, 1 min, 2 min, then 5 min. Opening the app, tapping the pin button or Bluetooth
+  turning on makes a direct try right away. The log's "Low-power scan #n" lines show the rate.
+- Pause (notification button or Settings > Pin): disconnects, stops searching, survives reboots. The
+  service keeps running with "Paused · tap to resume", using no radio. Tapping the pin button or Resume restarts it.
+
+## Pin vibration
+
+Not controllable: Plaud 3.30.0 sends no vibration, haptic or motor command (`docs/PROTOCOL.md`).
 
 ## Pin Ideas sheet
 
@@ -153,7 +167,6 @@ half repeats, the transcript gets a `.skipped` marker and is never uploaded (kep
   keystore SHA-1. Building on another machine (different debug key) breaks Drive auth until that
   SHA-1 is added to the same client. The app's Drive folder is the one it created (drive.file scope).
 
-- **Softer pin vibration.** Find a command to change or soften it.
 - **Hebrew transcription.** Needs a multilingual model (`base`/`small`, not `base.en`), language
   setting or auto-detect, and RTL-safe transcript files.
 - Low priority: phone-initiated "Start live" is slow and also makes the pin record. Works.

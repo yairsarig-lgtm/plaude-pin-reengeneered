@@ -66,8 +66,13 @@ object PinConfig {
     const val HEALTH_CHECK_INTERVAL_MS = 45_000L
 
     // --- Reconnect ---
-    const val RECONNECT_INITIAL_DELAY_MS = 1_000L
-    const val RECONNECT_MAX_DELAY_MS = 30_000L
+    /** Waits between tries while the pin isn't around; the last one repeats. */
+    val RECONNECT_DELAYS_MS = listOf(5_000L, 15_000L, 30_000L, 60_000L, 120_000L, 300_000L)
+    /** Each background try is one low-power scan this long (Android listens ~0.5 s of every 5 s). */
+    const val BACKGROUND_SCAN_WINDOW_MS = 12_000L
+    /** Advertised name, for a background scan's filter when no address is saved yet. */
+    const val PIN_NAME = "PLAUD NotePin"
+    const val SCAN_LOG_WINDOW_MS = 3_600_000L
 
     // --- Audio ---
     const val OPUS_SAMPLE_RATE = 16_000
@@ -174,4 +179,5 @@ object PinConfig {
     // --- Prefs ---
     const val PREFS_NAME = "pinlink"
     const val PREF_LAST_ADDRESS = "last_address"
+    const val PREF_PAUSED = "link_paused"
 }

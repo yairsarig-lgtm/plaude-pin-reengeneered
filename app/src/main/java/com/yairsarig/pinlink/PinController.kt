@@ -17,6 +17,7 @@ import com.yairsarig.pinlink.protocol.PinNotification
 import com.yairsarig.pinlink.protocol.PlaudCommand
 import com.yairsarig.pinlink.protocol.PlaudProtocol
 import com.yairsarig.pinlink.protocol.toHex
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -24,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +70,12 @@ class PinController(private val context: Context) {
     val bluetoothOn: StateFlow<Boolean> = _bluetoothOn
 
     private val prefs = context.getSharedPreferences(PinConfig.PREFS_NAME, Context.MODE_PRIVATE)
+    /** Owner paused the background connection: no link, no scanning, survives reboots. */
+    private val _paused = MutableStateFlow(prefs.getBoolean(PinConfig.PREF_PAUSED, false))
+    val paused: StateFlow<Boolean> = _paused
+    /** How long until the next try while waiting between tries; null otherwise. */
+    private val _nextTryInMs = MutableStateFlow<Long?>(null)
+    val nextTryInMs: StateFlow<Long?> = _nextTryInMs
     private val recordingsDir = Pipeline.recordingsDir(context)
     private val pendingResponses = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
     private val stampFmt = SimpleDateFormat(PinConfig.FILE_NAME_PATTERN, Locale.US)
@@ -79,6 +88,7 @@ class PinController(private val context: Context) {
     @Volatile private var liveSessionId: Long? = null
     @Volatile private var userWantsLink = false
     private var reconnectJob: Job? = null
+    private var connectJob: Job? = null
     private var healthJob: Job? = null
     @Volatile private var lastRxAt = 0L
     private var audioPacketsSinceUiLog = 0
@@ -92,7 +102,7 @@ class PinController(private val context: Context) {
             when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
                 BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
                     _bluetoothOn.value = false
-                    reconnectJob?.cancel()
+                    stopLooking()
                     if (client.state.value != LinkState.DISCONNECTED) handleDeadLink("Bluetooth turned off", reconnect = false)
                 }
                 BluetoothAdapter.STATE_ON -> {
@@ -113,33 +123,77 @@ class PinController(private val context: Context) {
 
     // ---------- Link ----------
 
-    fun connect() = scope.launch {
+    /** A try right now, then the backoff from its start. Does nothing while paused. */
+    fun connect(): Job = scope.launch {
+        if (_paused.value) return@launch
         userWantsLink = true
-        reconnectJob?.cancel()
-        runCatching { connectOnce() }.onFailure {
-            PinLog.e("Connect failed: ${it.message}")
+        stopLooking()
+        try {
+            connectOnce()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            PinLog.e("Connect failed: ${t.message}")
             // Out of range, Bluetooth busy after boot, ...: keep trying in the background.
             if (userWantsLink && client.state.value != LinkState.READY) scheduleReconnect()
         }
-    }
+    }.also { connectJob = it }
 
     /** Connects on launch if we've linked to a pin before and aren't linked already. */
     fun autoConnect() {
         if (client.state.value == LinkState.DISCONNECTED && prefs.contains(PinConfig.PREF_LAST_ADDRESS)) connect()
     }
 
+    /** The app came to the front: stop waiting out the backoff and try now. */
+    fun wake() {
+        if (userWantsLink && client.state.value == LinkState.DISCONNECTED) connect()
+    }
+
+    /** Disconnects and stops all searching until [resume] or Send now. */
+    fun pause() {
+        if (_paused.value) return
+        setPaused(true)
+        disconnect()
+    }
+
+    fun resume() {
+        if (!_paused.value) return
+        setPaused(false)
+        connect()
+    }
+
+    private fun setPaused(on: Boolean) {
+        prefs.edit().putBoolean(PinConfig.PREF_PAUSED, on).apply()
+        _paused.value = on
+        PinLog.i(if (on) "Background connection paused" else "Background connection resumed")
+    }
+
+    private fun stopLooking() {
+        reconnectJob?.cancel()
+        _nextTryInMs.value = null
+    }
+
     fun disconnect() = scope.launch {
         userWantsLink = false
-        reconnectJob?.cancel()
+        stopLooking()
+        connectJob?.cancelAndJoin()
         healthJob?.cancel()
         if (liveSessionId != null) stopLiveSession().join()
         client.close()
         closeRecorder()
     }
 
-    private suspend fun connectOnce() {
-        val device = prefs.getString(PinConfig.PREF_LAST_ADDRESS, null)?.let { scanner.deviceFor(it) }
-            ?: scanner.find() ?: error("pin not found")
+    /**
+     * [background] tries look with a low-power scan and only connect once the pin is seen.
+     * Otherwise (the app or the owner asked) go straight at the saved address.
+     */
+    private suspend fun connectOnce(background: Boolean = false) {
+        val saved = prefs.getString(PinConfig.PREF_LAST_ADDRESS, null)
+        val device = if (background) {
+            scanner.findNearby(saved) ?: error("pin not seen")
+        } else {
+            saved?.let { scanner.deviceFor(it) } ?: scanner.find() ?: error("pin not found")
+        }
         client.connect(device)
         prefs.edit().putString(PinConfig.PREF_LAST_ADDRESS, device.address).apply()
         startHealthCheck()
@@ -152,6 +206,7 @@ class PinController(private val context: Context) {
      * [PinConfig.SEND_CONNECT_TIMEOUT_MS] (out of range); background reconnects carry on.
      */
     suspend fun ensureConnected(): Boolean {
+        if (_paused.value) setPaused(false) // Send now resumes a paused link
         if (client.state.value == LinkState.READY) return true
         if (!_bluetoothOn.value) return false
         if (client.state.value == LinkState.DISCONNECTED) connect()
@@ -197,13 +252,17 @@ class PinController(private val context: Context) {
     private fun scheduleReconnect() {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
-            var backoff = PinConfig.RECONNECT_INITIAL_DELAY_MS
+            var attempt = 0
             while (userWantsLink && client.state.value != LinkState.READY) {
-                PinLog.i("Reconnecting in ${backoff}ms")
-                delay(backoff)
+                val wait = LinkNotice.retryDelayMs(attempt)
+                PinLog.i("Looking for pin: try ${attempt + 1} in ${wait / 1000} s")
+                _nextTryInMs.value = wait
+                delay(wait)
+                _nextTryInMs.value = null
                 if (client.state.value == LinkState.READY) break // a drop's own reconnect got there first
-                if (runCatching { connectOnce() }.isSuccess) break
-                backoff = (backoff * 2).coerceAtMost(PinConfig.RECONNECT_MAX_DELAY_MS)
+                if (runCatching { connectOnce(background = true) }.isSuccess) break
+                ensureActive() // runCatching also swallows our own cancellation
+                attempt++
             }
         }
     }
@@ -249,7 +308,11 @@ class PinController(private val context: Context) {
 
     /** The header's pin button: connect if needed (connecting syncs), else pull whatever is pending. */
     fun syncNow() {
-        if (client.state.value == LinkState.READY) syncAll() else connect()
+        when {
+            _paused.value -> resume()
+            client.state.value == LinkState.READY -> syncAll()
+            else -> connect()
+        }
     }
 
     private var syncJob: Deferred<Int>? = null

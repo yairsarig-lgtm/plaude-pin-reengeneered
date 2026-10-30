@@ -78,6 +78,7 @@ class SettingsUi(
     val hasToken: Boolean,
     /** Outcome of the last Test, in plain words (null = not run, "Testing…" while running). */
     val testResult: String?,
+    val paused: Boolean,
 )
 
 class SettingsActions(
@@ -98,6 +99,7 @@ class SettingsActions(
     val saveRoutine: (url: String, token: String?) -> Unit,
     val testRoutine: () -> Unit,
     val setAutoSend: (Boolean) -> Unit,
+    val setPaused: (Boolean) -> Unit,
 )
 
 /** Same look as home: one #F2F1EC card per section, hairlines inside, small uppercase labels above. */
@@ -137,7 +139,12 @@ private fun PinCard(ui: SettingsUi, act: SettingsActions) = SettingsCard("Pin") 
             Spacer(Modifier.width(10.dp))
             Text("Plaud NotePin", style = Pocket.rowTitle)
         }
-        val state = when (ui.link) { LinkState.READY -> "Connected"; LinkState.CONNECTING -> "Connecting…"; LinkState.DISCONNECTED -> "Not connected" }
+        val state = when {
+            ui.paused -> "Paused"
+            ui.link == LinkState.READY -> "Connected"
+            ui.link == LinkState.CONNECTING -> "Connecting…"
+            else -> "Not connected"
+        }
         val battery = ui.battery?.let { " · battery ${it.percent}%${if (it.charging) " (charging)" else ""}" }.orEmpty()
         val waiting = if (ui.filesOnPin == 1) "1 recording waiting" else "${ui.filesOnPin} recordings waiting"
         Text("$state$battery · $waiting", style = Pocket.small, modifier = Modifier.padding(top = 6.dp))
@@ -146,6 +153,8 @@ private fun PinCard(ui: SettingsUi, act: SettingsActions) = SettingsCard("Pin") 
             OutlineButton("Disconnect", Modifier.weight(1f), act.disconnect)
         }
     }
+    Hairline()
+    SwitchRow("Pause background connection", "Disconnects and stops searching. Tap the pin button to resume.", ui.paused, act.setPaused)
     Hairline()
     ActionRow("Forget this pin", color = Pocket.danger, onClick = act.forget)
 }
@@ -173,15 +182,8 @@ private fun ClaudeCard(ui: SettingsUi, act: SettingsActions) = SettingsCard("Cla
         ui.testResult?.let { SelectionContainer { Text(it, style = Pocket.small, modifier = Modifier.padding(top = 10.dp)) } }
     }
     Hairline()
-    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Send to Claude automatically", style = Pocket.body)
-            Text("Batches memos for ${PinConfig.FIRE_DEBOUNCE_SECONDS} s · hourly check stays as backup", style = Pocket.small.copy(fontSize = 12.sp))
-        }
-        Switch(ui.claude.auto, act.setAutoSend, colors = SwitchDefaults.colors(
-            checkedTrackColor = Pocket.ink, checkedThumbColor = Color.White,
-            uncheckedTrackColor = Pocket.background, uncheckedBorderColor = Pocket.outline, uncheckedThumbColor = Pocket.muted))
-    }
+    SwitchRow("Send to Claude automatically", "Batches memos for ${PinConfig.FIRE_DEBOUNCE_SECONDS} s · hourly check stays as backup",
+        ui.claude.auto, act.setAutoSend)
 }
 
 @Composable
@@ -323,6 +325,19 @@ private fun Padded(arrangement: Arrangement.Vertical = Arrangement.Top, content:
 
 @Composable
 private fun Hairline() = Box(Modifier.fillMaxWidth().padding(start = 18.dp).height(1.dp).background(Pocket.hairline))
+
+@Composable
+private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, style = Pocket.body)
+            Text(subtitle, style = Pocket.small.copy(fontSize = 12.sp))
+        }
+        Switch(checked, onChange, colors = SwitchDefaults.colors(
+            checkedTrackColor = Pocket.ink, checkedThumbColor = Color.White,
+            uncheckedTrackColor = Pocket.background, uncheckedBorderColor = Pocket.outline, uncheckedThumbColor = Pocket.muted))
+    }
+}
 
 /** Full-width tappable row: title (optionally coloured), grey subtitle. */
 @Composable

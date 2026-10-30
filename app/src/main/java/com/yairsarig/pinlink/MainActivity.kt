@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         setupSteps.value = setup.pendingSteps() // re-check after returning from a settings screen
+        controller.wake() // opening the app ends any backoff wait
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -156,6 +157,7 @@ class MainActivity : ComponentActivity() {
         val bluetoothOn by controller.bluetoothOn.collectAsStateWithLifecycle()
         val sendPhase by sendNow.phase.collectAsStateWithLifecycle()
         val claude by ClaudeTrigger.state.collectAsStateWithLifecycle()
+        val paused by controller.paused.collectAsStateWithLifecycle()
         var now by remember { mutableStateOf(System.currentTimeMillis()) }
         var testResult by remember { mutableStateOf<String?>(null) }
         var showSettings by remember { mutableStateOf(false) }
@@ -182,7 +184,7 @@ class MainActivity : ComponentActivity() {
 
         val busy = pinRecording || transfer != null
         val status = StatusModel.of(StatusInputs(bluetoothOn, link, pinRecording, transfer != null, stored.size,
-            pipeline, sendPhase, driveConnected, claude, now))
+            pipeline, sendPhase, driveConnected, claude, now, paused))
 
         if (showSettings) {
             BackHandler { showSettings = false }
@@ -190,7 +192,7 @@ class MainActivity : ComponentActivity() {
                 SettingsUi(link, battery, stored.size, busy, driveConnected, ideas.sheetId,
                     DeviceSetup.Step.entries.filter { it == DeviceSetup.Step.BATTERY_EXEMPTION || setup.isXiaomi }, setupSteps.value,
                     ModelManager(this).isReady, pipeline, Pipeline.lastUploadAt(this), controller.recordingsOnPhone(), log,
-                    claude, ClaudeTrigger.routineUrl(), ClaudeTrigger.hasToken(), testResult),
+                    claude, ClaudeTrigger.routineUrl(), ClaudeTrigger.hasToken(), testResult, paused),
                 SettingsActions(
                     back = { showSettings = false },
                     syncNow = controller::syncNow,
@@ -211,6 +213,7 @@ class MainActivity : ComponentActivity() {
                         scope.launch { testResult = describe(ClaudeTrigger.fireTest()) }
                     },
                     setAutoSend = ClaudeTrigger::setAuto,
+                    setPaused = { if (it) controller.pause() else controller.resume() },
                 ),
             )
         } else {

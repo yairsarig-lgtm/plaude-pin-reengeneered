@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 
 /** All notification channels and IDs in one place. */
 object Notifications {
@@ -23,14 +24,29 @@ object Notifications {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS, "Needs attention", NotificationManager.IMPORTANCE_DEFAULT))
     }
 
-    fun service(context: Context): Notification =
-        Notification.Builder(context, CHANNEL_LINK)
+    /** The persistent notification: what the link is doing, a Pause/Resume button. Paused, a tap resumes. */
+    fun service(context: Context, notice: LinkNotice): Notification {
+        val toggle = serviceAction(context, if (notice.paused) PinLinkService.ACTION_RESUME else PinLinkService.ACTION_PAUSE)
+        return Notification.Builder(context, CHANNEL_LINK)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle(PinConfig.APP_NAME)
-            .setContentText("Listening to the pin")
-            .setContentIntent(openApp(context, connectDrive = false))
+            .setContentText(notice.text)
+            .setContentIntent(if (notice.paused) toggle else openApp(context, connectDrive = false))
+            .addAction(Notification.Action.Builder(
+                Icon.createWithResource(context, if (notice.paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause),
+                if (notice.paused) "Resume" else "Pause", toggle).build())
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
             .build()
+    }
+
+    fun updateService(context: Context, notice: LinkNotice) =
+        context.getSystemService(NotificationManager::class.java).notify(ID_SERVICE, service(context, notice))
+
+    private fun serviceAction(context: Context, action: String): PendingIntent =
+        PendingIntent.getForegroundService(context, action.hashCode(),
+            Intent(context, PinLinkService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     /** Uploads are stuck until the owner re-grants Drive access; tapping opens the consent screen. */
     fun driveReconnect(context: Context) {
